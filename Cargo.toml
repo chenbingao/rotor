@@ -1,0 +1,14 @@
+[package]
+name = "timing-wheel"
+version = "0.1.0"
+edition = "2021"
+description = "General-purpose hierarchical timing wheel — heartbeat, one-shot delays, request timeouts"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/shiro/timing-wheel"
+readme = "README.md"
+keywords = ["timing-wheel", "heartbeat", "timer", "netty", "scheduler", "delay", "timeout"]
+categories = ["asynchronous", "data-structures"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "test-util"] }
+log = "0.4"

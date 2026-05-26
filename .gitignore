@@ -1,0 +1,13 @@
+/target
+/debug
+/release
+**/*.rs.bk
+Cargo.lock
+.DS_Store
+.idea
+.vscode
+*.iml
+*.log
+.claude*/
+.codex*/
+tmp/
