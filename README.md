@@ -64,34 +64,33 @@ wheel.shutdown();
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `wheel_size` | 64 | Number of slots |
-| `tick_interval` | 1 s | Duration per slot |
-| `batch_size` | 200 | Max callback spawns per tick |
-| `channel_capacity` | 10 000 | Command channel buffer size |
+| `tick_interval` | 1 s | Duration of one Level-0 tick |
+| `batch_size` | 500 | Max callback spawns per tick |
+| `channel_capacity` | 65536 | Command channel buffer size |
 
-Timeout window = `wheel_size × tick_interval` (default: 64 s).
-Maximum delay = `wheel_size × 2` (default: 128 s).
+3-level wheel, 64 slots per level.  Timeout window: 64 s (L0), ~68 min (L1), ~73 h (L2).
 
 ## How it works
 
 ```
 Commands (insert / reset / remove)
-    │
-    ▼  mpsc channel (single producer per clone)
-┌──────────────────┐
-│  Worker thread   │
-│                  │
-│  ┌───┬───┬───┐   │  interval.tick() fires every tick_interval
-│  │ 0 │ 1 │… │63│   │  ← 64 slots, each holds Vec<Scheduled<T>>
-│  └───┴───┴───┘   │
-│    ↑              │
-│  current_tick     │  advance() → sweep slot, drain expired
-│                  │
-│  HashMap<T, Info> │  task_info: expire_tick + generation
-└──────────────────┘
-    │
-    ▼  tokio::spawn per callback (bounded by batch_size)
-  expired tasks
+    |
+    v   mpsc channel
++----------------------------+
+| Worker thread              |
+|                            |
+|  +---+---+-------+---+     |  interval.tick()
+|  | 0 | 1 | ...   |63 |     |  fires every tick_interval
+|  +---+---+-------+---+     |
+|    ^                       |
+|  current_tick              |  advance() -> sweep
+|                            |  cascade L2->L1->L0
+|  task_info: HashMap        |  expire_tick + generation
+|  arena: Vec<TaskEntry>     |
++----------------------------+
+    |
+    v   tokio::spawn per callback
+  expired tasks (batch_size limit)
 ```
 
 - **insert / reset**: pushes a `Scheduled { id, generation }` into the
