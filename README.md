@@ -10,8 +10,8 @@ with generation counters, clock compensation, and concurrent batch processing.
 
 ## When to use
 
-- **Heartbeat / keep-alive management**: `reset()` on every ping — O(1), old
-  slot entries are lazily discarded.
+- **Extend deadlines**: `reset()` to push the expiry further — heartbeat, request
+  progress, lease renewal.  O(1), old slot copies lazily discarded.
 - **One-shot delays**: `insert()` a task once, callback fires after timeout,
   no cleanup needed.
 - **Request timeouts**: wrap a request ID, cancel with `remove()` on success.

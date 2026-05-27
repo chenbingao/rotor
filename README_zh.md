@@ -9,7 +9,7 @@
 
 ## 适用场景
 
-- **心跳 / 长连接保活**：每次 ping 调用 `reset()` — O(1)，旧槽位副本懒删除。
+- **重新计时**：`reset()` 推迟到期时间 — 心跳、请求进度、租约续约。O(1)，旧槽位副本懒删除。
 - **一次性延时**：`insert()` 到期后自动触发回调并清除，无需手动清理。
 - **请求超时**：包裹请求 ID，成功后 `remove()` 取消。
 
@@ -17,7 +17,7 @@
 
 ## 特性
 
-- **O(1) reset** — 生成计数器懒删除，高频刷新路径极快。
+- **O(1) reset** — 生成计数器懒删除，延期操作 O(1)。
 - **显式超时** — 每次 `insert` / `reset` 接受 `Duration`，无隐式默认值。
 - **时钟补偿** — GC 暂停或系统负载尖峰后自动追格，不会丢失时间。
 - **批量处理** — 每 tick 限制 spawn 数量，防止瞬间压爆 runtime。
@@ -77,24 +77,24 @@ println!("活跃={} 插入={} 丢弃={} 到期={}",
 ## 原理
 
 ```
-insert / reset / remove 命令
+Commands (insert / reset / remove)
     |
-    v   mpsc 通道
+    v   mpsc channel
 +----------------------------+
-| Worker（单线程核心）       |
+| Worker thread              |
 |                            |
-| L2 小时层: 64 槽 x 4096t   |
-| L1 分钟层: 64 槽 x 64t     |
-| L0 秒层:   64 槽 x 1t      |
+|  +---+---+-------+---+     |  interval.tick()
+|  | 0 | 1 | ...   |63 |     |  fires every tick_interval
+|  +---+---+-------+---+     |
 |    ^                       |
-|  current_tick              |
-|                            |
-|  arena: Vec                |
-|  task_info: HashMap        |
+|  current_tick              |  advance() -> sweep
+|                            |  cascade L2->L1->L0
+|  task_info: HashMap        |  expire_tick + generation
+|  arena: Vec<TaskEntry>     |
 +----------------------------+
     |
-    v   tokio::spawn（batch 限流）
-  到期回调
+    v   tokio::spawn per callback
+  expired tasks (batch_size limit)
 ```
 
 三层轮到期向下级联：L2 → L1 → L0 → 触发回调。槽内只存 arena 索引，不复制 ID。旧 reset 副本 generation 不匹配时自动丢弃。
