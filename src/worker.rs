@@ -17,6 +17,10 @@ use crate::{config::*, handle::Metrics, wheel::{Cmd, Wheel}};
 
 // ── Worker ──────────────────────────────────────────────────────────────
 
+/// Worker event-loop: dispatch commands and advance the wheel on each tick.
+///
+/// On `Cmd::Shutdown` (or channel closure) the loop drains all remaining
+/// expired tasks before returning, and resets the active counter to zero.
 pub(crate) async fn run<T, F, Fut>(
   mut rx: Receiver<Cmd<T>>,
   config: WheelConfig,
@@ -79,6 +83,10 @@ pub(crate) async fn run<T, F, Fut>(
   }
 }
 
+/// Fire up to `limit` callbacks from the `pending` batch, up to `limit`
+/// items.  Each callback is spawned via `tokio::spawn` and awaited.
+///
+/// Panicked callbacks are logged and counted in [`Metrics::abnormal`].
 async fn drain<T, F, Fut>(
   pending: &mut Vec<T>,
   callback: &mut F,

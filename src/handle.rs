@@ -31,12 +31,21 @@ pub struct TimingWheel<T> {
   shared: Arc<Metrics>,
 }
 
+/// Runtime statistics exposed by the timing wheel.
+///
+/// All counters are relaxed-ordered atomics and are **not** intended for
+/// strict synchronisation — use them for observability and diagnostics.
 #[derive(Default)]
 pub struct Metrics {
+  /// Number of tasks currently tracked by the wheel.
   pub active: AtomicUsize,
+  /// Cumulative insertions (includes `reset` calls).
   pub inserted: AtomicUsize,
+  /// Commands dropped because the channel was at capacity.
   pub dropped: AtomicUsize,
+  /// Callbacks that fired successfully.
   pub expirations: AtomicUsize,
+  /// Callbacks that panicked or otherwise terminated abnormally.
   pub abnormal: AtomicUsize,
 }
 
@@ -45,6 +54,17 @@ impl<T: Send + 'static> TimingWheel<T> {
   ///
   /// If a task with the same `id` already exists, its timeout is replaced.
   /// No manual cleanup is needed — the task is removed after expiry.
+  ///
+  /// Returns `false` if the command channel is at capacity.
+  ///
+  /// # Example
+  ///
+  /// ```rust,no_run
+  /// # use std::time::Duration;
+  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
+  /// wheel.insert("my-task".into(), Duration::from_secs(10));
+  /// ```
   #[inline]
   pub fn insert(&self, id: T, timeout: Duration) -> bool {
     self.dispatch(Cmd::Insert(id, timeout))
@@ -54,12 +74,37 @@ impl<T: Send + 'static> TimingWheel<T> {
   ///
   /// Previous scheduled copies are lazily discarded.  Safe to call at
   /// high frequency (e.g. every WebSocket ping).
+  ///
+  /// Returns `false` if the command channel is at capacity.
+  ///
+  /// # Example
+  ///
+  /// ```rust,no_run
+  /// # use std::time::Duration;
+  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
+  /// wheel.reset("conn-1".into(), Duration::from_secs(60));
+  /// ```
   #[inline]
   pub fn reset(&self, id: T, timeout: Duration) -> bool {
     self.dispatch(Cmd::Reset(id, timeout))
   }
 
-  /// Explicitly cancel a task.
+  /// Explicitly cancel a task so its callback will not fire.
+  ///
+  /// Safe to call for IDs that do not exist (becomes a no-op).
+  ///
+  /// Returns `false` if the command channel is at capacity.
+  ///
+  /// # Example
+  ///
+  /// ```rust,no_run
+  /// # use std::time::Duration;
+  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
+  /// wheel.insert("req-1".into(), Duration::from_secs(30));
+  /// wheel.remove(&"req-1".to_string());
+  /// ```
   #[inline]
   pub fn remove(&self, id: &T) -> bool
   where
@@ -68,17 +113,51 @@ impl<T: Send + 'static> TimingWheel<T> {
     self.tx.try_send(Cmd::Remove(id.clone())).is_ok()
   }
 
-  /// Gracefully shut down the wheel.  Pending callbacks will fire.
+  /// Gracefully shut down the wheel.  Pending callbacks will still fire.
+  ///
+  /// Returns `false` if the command channel is at capacity.
+  ///
+  /// # Example
+  ///
+  /// ```rust,no_run
+  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
+  /// wheel.shutdown();
+  /// ```
   #[inline]
   pub fn shutdown(&self) -> bool {
     self.tx.try_send(Cmd::Shutdown).is_ok()
   }
 
-  #[inline] pub fn active_tasks(&self) -> usize { self.shared.active.load(Ordering::Relaxed) }
-  #[inline] pub fn inserted_total(&self) -> usize { self.shared.inserted.load(Ordering::Relaxed) }
-  #[inline] pub fn dropped_total(&self) -> usize { self.shared.dropped.load(Ordering::Relaxed) }
-  #[inline] pub fn expirations_total(&self) -> usize { self.shared.expirations.load(Ordering::Relaxed) }
-  #[inline] pub fn abnormal_total(&self) -> usize { self.shared.abnormal.load(Ordering::Relaxed) }
+  /// Number of tasks currently active (not yet expired or removed).
+  #[inline]
+  pub fn active_tasks(&self) -> usize {
+    self.shared.active.load(Ordering::Relaxed)
+  }
+
+  /// Total tasks inserted since the wheel started (includes resets).
+  #[inline]
+  pub fn inserted_total(&self) -> usize {
+    self.shared.inserted.load(Ordering::Relaxed)
+  }
+
+  /// Total commands dropped because the channel was at capacity.
+  #[inline]
+  pub fn dropped_total(&self) -> usize {
+    self.shared.dropped.load(Ordering::Relaxed)
+  }
+
+  /// Total callbacks that have fired successfully.
+  #[inline]
+  pub fn expirations_total(&self) -> usize {
+    self.shared.expirations.load(Ordering::Relaxed)
+  }
+
+  /// Total callbacks that panicked or otherwise terminated abnormally.
+  #[inline]
+  pub fn abnormal_total(&self) -> usize {
+    self.shared.abnormal.load(Ordering::Relaxed)
+  }
 
   fn dispatch(&self, cmd: Cmd<T>) -> bool {
     if self.tx.try_send(cmd).is_ok() {
@@ -93,6 +172,11 @@ impl<T: Send + 'static> TimingWheel<T> {
 
 // ── Guard ────────────────────────────────────────────────────────────────
 
+/// RAII guard that keeps the timing wheel worker task alive.
+///
+/// Dropping this guard **aborts** the worker.  Store it in a variable
+/// for the lifetime of the wheel, or use `Box::leak` / `forget` if you
+/// need the wheel to outlive the current scope.
 #[must_use = "TimingWheelGuard must be stored or the wheel stops immediately"]
 pub struct TimingWheelGuard {
   task: Option<JoinHandle<()>>,
@@ -109,6 +193,28 @@ impl Drop for TimingWheelGuard {
 // ── Constructor ─────────────────────────────────────────────────────────
 
 impl<T: Eq + Hash + Clone + Send + Debug + 'static> TimingWheel<T> {
+  /// Start a new timing wheel on a background tokio task.
+  ///
+  /// The returned [`TimingWheelGuard`] **must** be held for the wheel's
+  /// lifetime — dropping it aborts the worker immediately.
+  ///
+  /// The `callback` closure is invoked (via `tokio::spawn`) for each
+  /// expired task.  Returning a future lets you perform async work such
+  /// as network I/O or database writes inside the timeout handler.
+  ///
+  /// # Example
+  ///
+  /// ```rust,no_run
+  /// use std::time::Duration;
+  /// use timing_wheel::{TimingWheel, WheelConfig};
+  ///
+  /// let (wheel, _guard) = TimingWheel::start(
+  ///     WheelConfig::default(),
+  ///     |id: String| async move { println!("{id} timed out") },
+  /// );
+  ///
+  /// wheel.insert("req-001".into(), Duration::from_secs(10));
+  /// ```
   pub fn start<F, Fut>(config: WheelConfig, callback: F) -> (TimingWheel<T>, TimingWheelGuard)
   where
     F: FnMut(T) -> Fut + Send + 'static,
