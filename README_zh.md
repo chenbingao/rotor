@@ -1,7 +1,7 @@
-# rotor
+# rotor-wheel
 
-[![Crates.io](https://img.shields.io/crates/v/rotor)](https://crates.io/crates/rotor)
-[![License](https://img.shields.io/crates/l/rotor)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/rotor-wheel)](https://crates.io/crates/rotor-wheel)
+[![License](https://img.shields.io/crates/l/rotor-wheel)](LICENSE)
 
 基于分层时间轮的通用异步定时任务调度器。
 

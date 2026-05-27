@@ -1,6 +1,6 @@
 [package]
 name = "rotor-wheel"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "General-purpose hierarchical timing wheel — heartbeat, one-shot delays, request timeouts"
 license = "MIT OR Apache-2.0"
