@@ -6,7 +6,7 @@ description = "General-purpose hierarchical timing wheel — heartbeat, one-shot
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/chenbingao/rotor-wheel"
 readme = "README.md"
-keywords = ["rotor", "heartbeat", "timer", "netty", "scheduler", "delay", "timeout"]
+keywords = ["timing-wheel", "heartbeat", "netty", "scheduler", "timer"]
 categories = ["asynchronous", "data-structures"]
 
 
