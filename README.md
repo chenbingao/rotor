@@ -33,14 +33,14 @@ need O(1) refresh.
 
 ```toml
 [dependencies]
-rotor = "0.1"
+rotor-wheel = "0.1"
 ```
 
 ## Quick start
 
 ```rust
 use std::time::Duration;
-use rotor::{TimingWheel, WheelConfig};
+use rotor_wheel::{TimingWheel, WheelConfig};
 
 let (wheel, _guard) = TimingWheel::start(
     WheelConfig::default(),               // 64 slots × 1s = 64s window

@@ -29,14 +29,14 @@
 
 ```toml
 [dependencies]
-rotor = "0.1"
+rotor-wheel = "0.1"
 ```
 
 ## 快速开始
 
 ```rust
 use std::time::Duration;
-use rotor::{TimingWheel, WheelConfig};
+use rotor_wheel::{TimingWheel, WheelConfig};
 
 let (wheel, _guard) = TimingWheel::start(
     WheelConfig::default(),
