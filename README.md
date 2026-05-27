@@ -50,7 +50,7 @@ let (wheel, _guard) = TimingWheel::start(
 // One-shot delay
 wheel.insert("req-001".into(), Duration::from_secs(10));
 
-// Heartbeat — call on every ping
+// Extend deadline — reset countdown from now
 wheel.reset("conn-002".into(), Duration::from_secs(60));
 
 // Cancel

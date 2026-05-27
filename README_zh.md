@@ -46,7 +46,7 @@ let (wheel, _guard) = TimingWheel::start(
 // 一次性延时 — 10 秒后触发，自动清除
 wheel.insert("req-001".into(), Duration::from_secs(10));
 
-// 心跳刷新 — 每次 ping 延长 60 秒
+// 重新计时 — 到期时间从当前时刻再推迟 60 秒
 wheel.reset("conn-002".into(), Duration::from_secs(60));
 
 // 主动取消
