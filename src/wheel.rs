@@ -66,6 +66,7 @@ pub(crate) struct Wheel<T> {
 
 impl<T: Eq + Hash + Clone + Debug> Wheel<T> {
   pub(crate) fn new(tick_interval: Duration) -> Self {
+    assert!(tick_interval >= Duration::from_millis(1), "tick_interval must be >= 1ms");
     Self {
       levels: [
         Level::new(LV0_SLOTS, LV0_TICK),

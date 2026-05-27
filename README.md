@@ -1,7 +1,7 @@
-# timing-wheel
+# rotor
 
-[![Crates.io](https://img.shields.io/crates/v/timing-wheel)](https://crates.io/crates/timing-wheel)
-[![License](https://img.shields.io/crates/l/timing-wheel)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/rotor)](https://crates.io/crates/rotor)
+[![License](https://img.shields.io/crates/l/rotor)](LICENSE)
 
 General-purpose hierarchical timing wheel for Rust async runtimes.
 
@@ -33,14 +33,14 @@ need O(1) refresh.
 
 ```toml
 [dependencies]
-timing-wheel = "0.1"
+rotor = "0.1"
 ```
 
 ## Quick start
 
 ```rust
 use std::time::Duration;
-use timing_wheel::{TimingWheel, WheelConfig};
+use rotor::{TimingWheel, WheelConfig};
 
 let (wheel, _guard) = TimingWheel::start(
     WheelConfig::default(),               // 64 slots × 1s = 64s window

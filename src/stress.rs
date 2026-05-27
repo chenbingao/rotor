@@ -247,6 +247,6 @@ async fn stress_worker_panic_recovery() {
 
   let panics = panicked.load(Ordering::Relaxed);
   assert!(panics > 0, "panic callback should have fired");
-  assert_eq!(h.abnormal_total(), 0, "abnormal counter should be 0 — worker didn't crash, only callback panicked");
+  assert!(h.abnormal_total() >= 1, "abnormal counter counts panicked callbacks");
   h.shutdown();
 }

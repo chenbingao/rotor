@@ -28,7 +28,7 @@
 //!
 //! ```rust,no_run
 //! use std::time::Duration;
-//! use timing_wheel::{TimingWheel, WheelConfig};
+//! use rotor::{TimingWheel, WheelConfig};
 //!
 //! let (wheel, _guard) = TimingWheel::start(
 //!     WheelConfig::default(),

@@ -1,6 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::time::Duration;
-use timing_wheel::{TimingWheel, WheelConfig};
+use rotor::{TimingWheel, WheelConfig};
 
 fn config() -> WheelConfig {
   WheelConfig {

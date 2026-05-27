@@ -99,3 +99,18 @@ async fn test_shutdown() {
   h.shutdown();
   assert!(n.load(Ordering::SeqCst) >= 1);
 }
+
+#[tokio::test]
+async fn test_panicked_callback_increments_abnormal() {
+  pause();
+  let (h, _g) = TimingWheel::start(cfg_fast(), move |_: String| {
+    async move { panic!("intentional") }
+  });
+  sleep(Duration::from_millis(5)).await;
+  h.insert("x".into(), Duration::from_millis(100));
+  advance(Duration::from_millis(300)).await;
+  sleep(Duration::from_millis(100)).await;
+  assert_eq!(h.abnormal_total(), 1);
+  assert_eq!(h.expirations_total(), 0);
+  h.shutdown();
+}

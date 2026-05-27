@@ -1,12 +1,12 @@
 [package]
-name = "timing-wheel"
+name = "rotor"
 version = "0.1.0"
 edition = "2021"
 description = "General-purpose hierarchical timing wheel — heartbeat, one-shot delays, request timeouts"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/shiro/timing-wheel"
+repository = "https://github.com/shiro/rotor"
 readme = "README.md"
-keywords = ["timing-wheel", "heartbeat", "timer", "netty", "scheduler", "delay", "timeout"]
+keywords = ["rotor", "heartbeat", "timer", "netty", "scheduler", "delay", "timeout"]
 categories = ["asynchronous", "data-structures"]
 
 [dependencies]

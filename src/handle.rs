@@ -61,7 +61,7 @@ impl<T: Send + 'static> TimingWheel<T> {
   ///
   /// ```rust,no_run
   /// # use std::time::Duration;
-  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # use rotor::{TimingWheel, WheelConfig};
   /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
   /// wheel.insert("my-task".into(), Duration::from_secs(10));
   /// ```
@@ -81,7 +81,7 @@ impl<T: Send + 'static> TimingWheel<T> {
   ///
   /// ```rust,no_run
   /// # use std::time::Duration;
-  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # use rotor::{TimingWheel, WheelConfig};
   /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
   /// wheel.reset("conn-1".into(), Duration::from_secs(60));
   /// ```
@@ -100,7 +100,7 @@ impl<T: Send + 'static> TimingWheel<T> {
   ///
   /// ```rust,no_run
   /// # use std::time::Duration;
-  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # use rotor::{TimingWheel, WheelConfig};
   /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
   /// wheel.insert("req-1".into(), Duration::from_secs(30));
   /// wheel.remove(&"req-1".to_string());
@@ -120,7 +120,7 @@ impl<T: Send + 'static> TimingWheel<T> {
   /// # Example
   ///
   /// ```rust,no_run
-  /// # use timing_wheel::{TimingWheel, WheelConfig};
+  /// # use rotor::{TimingWheel, WheelConfig};
   /// # let (wheel, _guard) = TimingWheel::start(WheelConfig::default(), |_: String| async {});
   /// wheel.shutdown();
   /// ```
@@ -206,7 +206,7 @@ impl<T: Eq + Hash + Clone + Send + Debug + 'static> TimingWheel<T> {
   ///
   /// ```rust,no_run
   /// use std::time::Duration;
-  /// use timing_wheel::{TimingWheel, WheelConfig};
+  /// use rotor::{TimingWheel, WheelConfig};
   ///
   /// let (wheel, _guard) = TimingWheel::start(
   ///     WheelConfig::default(),

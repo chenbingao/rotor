@@ -105,7 +105,8 @@ async fn drain<T, F, Fut>(
   }
   for t in tasks {
     if let Err(e) = t.await {
-      log::error!("timing-wheel callback panicked: {e}");
+      log::error!("rotor callback panicked: {e}");
+      metrics.abnormal.fetch_add(1, Ordering::Relaxed);
     } else {
       metrics.expirations.fetch_add(1, Ordering::Relaxed);
     }
