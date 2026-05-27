@@ -11,16 +11,18 @@ fn cfg_fast() -> WheelConfig {
   WheelConfig { tick_interval: Duration::from_millis(10), ..Default::default() }
 }
 
-fn inc(n: &Arc<AtomicUsize>) -> impl Future<Output = ()> + Send + 'static {
-  let n = Arc::clone(n);
-  async move { n.fetch_add(1, Ordering::SeqCst); }
+macro_rules! cb {
+  ($n:ident) => {{
+    let n = Arc::clone(&$n);
+    move |_: String| { let n = Arc::clone(&n); async move { n.fetch_add(1, Ordering::SeqCst); } }
+  }};
 }
 
 #[tokio::test]
 async fn test_one_shot() {
   pause();
   let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), { let n = Arc::clone(&n); move |_: String| inc(&n) });
+  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
   sleep(Duration::from_millis(5)).await;
   h.insert("x".into(), Duration::from_millis(200));
   advance(Duration::from_millis(500)).await;
@@ -32,7 +34,7 @@ async fn test_one_shot() {
 async fn test_reset_extends() {
   pause();
   let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), { let n = Arc::clone(&n); move |_: String| inc(&n) });
+  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
   sleep(Duration::from_millis(5)).await;
   h.insert("x".into(), Duration::from_secs(1));
   advance(Duration::from_millis(800)).await;
@@ -50,7 +52,7 @@ async fn test_reset_extends() {
 async fn test_remove() {
   pause();
   let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), { let n = Arc::clone(&n); move |_: String| inc(&n) });
+  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
   sleep(Duration::from_millis(5)).await;
   h.insert("x".into(), Duration::from_millis(200));
   h.remove(&"x".to_string());
@@ -63,7 +65,7 @@ async fn test_remove() {
 async fn test_long_delay_cascades_down() {
   pause();
   let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), { let n = Arc::clone(&n); move |_: String| inc(&n) });
+  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
   sleep(Duration::from_millis(5)).await;
   h.insert("x".into(), Duration::from_secs(10));
   advance(Duration::from_secs(5)).await;
@@ -91,7 +93,7 @@ async fn test_metrics() {
 async fn test_shutdown() {
   pause();
   let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), { let n = Arc::clone(&n); move |_: String| inc(&n) });
+  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
   sleep(Duration::from_millis(5)).await;
   h.insert("x".into(), Duration::from_millis(100));
   advance(Duration::from_millis(200)).await;

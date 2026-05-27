@@ -79,23 +79,25 @@ println!("活跃={} 插入={} 丢弃={} 到期={}",
 ```
 insert / reset / remove 命令
     |
-    v   mpsc 通道（多生产者 → 单消费者）
+    v   mpsc 通道
 +----------------------------+
-| Worker 线程（单线程核心）  |
+| Worker（单线程核心）       |
 |                            |
-| L2 小时层: 64 槽 × 4096t   |  ← 3 层分层轮
-| L1 分钟层: 64 槽 × 64t     |    到期向下级联
-| L0 秒层:   64 槽 × 1t      |    L2 → L1 → L0 → 触发
+| L2 小时层: 64 槽 x 4096t   |
+| L1 分钟层: 64 槽 x 64t     |
+| L0 秒层:   64 槽 x 1t      |
 |    ^                       |
-|  current_tick              |  advance() → 扫槽 → 级联
+|  current_tick              |
 |                            |
-|  arena: Vec<TaskEntry>     |  槽内只存 arena 索引
-|  task_info: HashMap        |  expire_tick + generation
+|  arena: Vec                |
+|  task_info: HashMap        |
 +----------------------------+
     |
-    v   tokio::spawn（batch_size 限制批量）
+    v   tokio::spawn（batch 限流）
   到期回调
 ```
+
+三层轮到期向下级联：L2 → L1 → L0 → 触发回调。槽内只存 arena 索引，不复制 ID。旧 reset 副本 generation 不匹配时自动丢弃。
 
 - **insert / reset**：将 `{ generation }` 推入目标槽位，bump `task_info` 中的 generation。
 - **advance**：清空 `current_tick` 对应槽位。如果 `task_info` 中 generation 匹配 → 到期 → 触发回调。旧 `reset` 副本 generation 不匹配 → 丢弃。
