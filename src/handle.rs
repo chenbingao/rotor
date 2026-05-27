@@ -37,6 +37,7 @@ pub struct Metrics {
   pub inserted: AtomicUsize,
   pub dropped: AtomicUsize,
   pub expirations: AtomicUsize,
+  pub abnormal: AtomicUsize,
 }
 
 impl<T: Send + 'static> TimingWheel<T> {
@@ -77,6 +78,7 @@ impl<T: Send + 'static> TimingWheel<T> {
   #[inline] pub fn inserted_total(&self) -> usize { self.shared.inserted.load(Ordering::Relaxed) }
   #[inline] pub fn dropped_total(&self) -> usize { self.shared.dropped.load(Ordering::Relaxed) }
   #[inline] pub fn expirations_total(&self) -> usize { self.shared.expirations.load(Ordering::Relaxed) }
+  #[inline] pub fn abnormal_total(&self) -> usize { self.shared.abnormal.load(Ordering::Relaxed) }
 
   fn dispatch(&self, cmd: Cmd<T>) -> bool {
     if self.tx.try_send(cmd).is_ok() {

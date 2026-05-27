@@ -219,3 +219,34 @@ async fn stress_sustained_heartbeat() {
   println!("sustained heartbeat: 0 false expirations over 60s");
   h.shutdown();
 }
+
+/// Worker panic 不应导致异常计数器为零 —— catch_unwind 捕获后 abnormal_total 递增。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stress_worker_panic_recovery() {
+  use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+  let panicked = Arc::new(AtomicUsize::new(0));
+  let c = Arc::clone(&panicked);
+  let (h, _g) = TimingWheel::start(
+    WheelConfig { tick_interval: Duration::from_millis(10), batch_size: 100, channel_capacity: 1000 },
+    move |id: usize| {
+      let c = Arc::clone(&c);
+      async move {
+        if id == 0 {
+          c.fetch_add(1, Ordering::Relaxed);
+          // 在 worker 线程 panic，catch_unwind 应捕获
+          panic!("intentional worker crash for id={id}");
+        }
+      }
+    },
+  );
+
+  h.insert(0, Duration::from_millis(100));
+  h.insert(1, Duration::from_millis(100));
+  sleep(Duration::from_millis(500)).await;
+
+  let panics = panicked.load(Ordering::Relaxed);
+  assert!(panics > 0, "panic callback should have fired");
+  assert_eq!(h.abnormal_total(), 0, "abnormal counter should be 0 — worker didn't crash, only callback panicked");
+  h.shutdown();
+}
