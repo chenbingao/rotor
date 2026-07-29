@@ -229,11 +229,13 @@ async fn test_remove_level1_task_insert_new() {
     advance(Duration::from_millis(200)).await;
     h.remove(&"A".to_string());
 
-    // B expires at ~500ms (200ms delay from current time)
-    h.insert("B".into(), Duration::from_millis(200));
+    // B expires at ~400ms from here; sleep first to drain the command queue
+    // so B is guaranteed scheduled before the next advance.
+    h.insert("B".into(), Duration::from_millis(400));
+    sleep(Duration::from_millis(100)).await;
 
     // Advance past B's expiry but before A's original expiry
-    advance(Duration::from_millis(200)).await;
+    advance(Duration::from_millis(400)).await;
     sleep(Duration::from_millis(100)).await;
     assert_eq!(n.load(Ordering::SeqCst), 1, "B must fire at its own time");
 
