@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     fmt::Debug,
     future::Future,
     hash::Hash,
@@ -20,18 +20,41 @@ use crate::config::WheelConfig;
 use crate::wheel::Cmd;
 use crate::worker::run;
 
+fn cancel_increment<T>(map: &Mutex<HashMap<T, usize>>, id: &T)
+where
+    T: Eq + Hash + Clone,
+{
+    map.lock()
+        .unwrap()
+        .entry(id.clone())
+        .and_modify(|c| *c += 1)
+        .or_insert(1);
+}
+
+fn cancel_decrement<T: Eq + Hash>(map: &Mutex<HashMap<T, usize>>, id: &T) {
+    let mut guard = map.lock().unwrap();
+    if let Some(c) = guard.get_mut(id) {
+        *c = c.saturating_sub(1);
+        if *c == 0 {
+            guard.remove(id);
+        }
+    }
+}
+
 // ── Public handle ───────────────────────────────────────────────────────
 
 /// Clonable handle for inserting, resetting, and removing tasks.
 ///
-/// All methods are non-blocking.  `remove()` and `reset()` register a
-/// synchronous cancellation marker that prevents the callback from firing
-/// even if the task was already queued for execution when the call was made.
+/// `remove()` and `reset()` register a synchronous cancellation marker
+/// that prevents the callback from firing even if the task was already
+/// queued for execution when the call was made.  The guarantee holds up
+/// to the point where the callback is spawned; once inside `tokio::spawn`
+/// the callback cannot be intercepted.
 #[derive(Clone)]
 pub struct TimingWheel<T> {
     tx: Sender<Cmd<T>>,
     shared: Arc<Metrics>,
-    cancelled: Arc<Mutex<HashSet<T>>>,
+    cancelled: Arc<Mutex<HashMap<T, usize>>>,
 }
 
 /// Runtime statistics exposed by the timing wheel.
@@ -42,7 +65,7 @@ pub struct TimingWheel<T> {
 pub struct Metrics {
     /// Number of tasks currently tracked by the wheel.
     pub active: AtomicUsize,
-    /// Cumulative insertions (includes `reset` calls).
+    /// Cumulative `insert` + `reset` calls.
     pub inserted: AtomicUsize,
     /// Commands dropped because the channel was at capacity.
     pub dropped: AtomicUsize,
@@ -55,8 +78,8 @@ pub struct Metrics {
 impl<T: Send + 'static> TimingWheel<T> {
     /// Schedule a one-shot task that fires after `timeout`.
     ///
-    /// If a task with the same `id` already exists, its timeout is replaced.
-    /// No manual cleanup is needed — the task is removed after expiry.
+    /// If a task with the same `id` already exists, its timeout is replaced
+    /// and any pending callback for that id is cancelled.
     ///
     /// Returns `false` if the command channel is at capacity.
     ///
@@ -82,8 +105,8 @@ impl<T: Send + 'static> TimingWheel<T> {
     /// not to fire — a synchronous cancellation marker is registered before
     /// the new timeout is scheduled.
     ///
-    /// Returns `false` if the command channel is at capacity (the
-    /// cancellation marker is still registered regardless).
+    /// Returns `false` if the command channel is at capacity; in that case
+    /// the cancellation marker is rolled back and the caller should retry.
     ///
     /// # Example
     ///
@@ -98,11 +121,12 @@ impl<T: Send + 'static> TimingWheel<T> {
     where
         T: Clone + Eq + Hash,
     {
-        self.cancelled.lock().unwrap().insert(id.clone());
+        cancel_increment(&self.cancelled, &id);
         if self.tx.try_send(Cmd::Reset(id.clone(), timeout)).is_ok() {
+            self.shared.inserted.fetch_add(1, Ordering::Relaxed);
             true
         } else {
-            self.cancelled.lock().unwrap().remove(&id);
+            cancel_decrement(&self.cancelled, &id);
             self.shared.dropped.fetch_add(1, Ordering::Relaxed);
             false
         }
@@ -112,6 +136,10 @@ impl<T: Send + 'static> TimingWheel<T> {
     /// not to fire — the cancellation is registered synchronously.
     ///
     /// Safe to call for IDs that do not exist (no-op).
+    ///
+    /// Returns `false` when the command channel is at capacity and the
+    /// asynchronous arena cleanup could not be enqueued.  The cancellation
+    /// guarantee still holds regardless.
     ///
     /// # Example
     ///
@@ -123,15 +151,17 @@ impl<T: Send + 'static> TimingWheel<T> {
     /// wheel.remove(&"req-1".to_string());
     /// ```
     #[inline]
-    pub fn remove(&self, id: &T)
+    pub fn remove(&self, id: &T) -> bool
     where
         T: Clone + Eq + Hash,
     {
-        self.cancelled.lock().unwrap().insert(id.clone());
-        let _ = self.tx.try_send(Cmd::Remove(id.clone()));
+        cancel_increment(&self.cancelled, id);
+        self.tx.try_send(Cmd::Remove(id.clone())).is_ok()
     }
 
-    /// Gracefully shut down the wheel.  Pending callbacks will still fire.
+    /// Gracefully shut down the wheel.  Pending callbacks will still fire
+    /// unless they were previously cancelled via [`remove`](Self::remove)
+    /// or [`reset`](Self::reset).
     ///
     /// Returns `false` if the command channel is at capacity.
     ///
@@ -153,7 +183,7 @@ impl<T: Send + 'static> TimingWheel<T> {
         self.shared.active.load(Ordering::Relaxed)
     }
 
-    /// Total tasks inserted since the wheel started (includes resets).
+    /// Total `insert` + `reset` calls since the wheel started.
     #[inline]
     pub fn inserted_total(&self) -> usize {
         self.shared.inserted.load(Ordering::Relaxed)
@@ -238,9 +268,11 @@ impl<T: Eq + Hash + Clone + Send + Debug + 'static> TimingWheel<T> {
         F: FnMut(T) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        assert!(config.batch_size >= 1, "batch_size must be >= 1");
+
         let (tx, rx) = mpsc::channel(config.channel_capacity);
         let shared = Arc::new(Metrics::default());
-        let cancelled = Arc::new(Mutex::new(HashSet::new()));
+        let cancelled = Arc::new(Mutex::new(HashMap::new()));
         let handle = TimingWheel {
             tx,
             shared: Arc::clone(&shared),

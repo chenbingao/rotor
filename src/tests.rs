@@ -284,3 +284,144 @@ async fn test_churn_then_insert() {
 
     h.shutdown();
 }
+
+// ── 0.3.0 regression tests ──────────────────────────────────────────────
+
+/// insert with same ID must cancel any old pending callback (#3).
+#[tokio::test]
+async fn test_insert_replaces_pending() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    // Schedule A to expire soon
+    h.insert("A".into(), Duration::from_millis(200));
+
+    // Advance part-way, then reinsert with a longer timeout before expiry
+    advance(Duration::from_millis(100)).await;
+    h.insert("A".into(), Duration::from_millis(600));
+
+    // Advance past the original 200ms expiry
+    advance(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        0,
+        "old pending callback must not fire after reinsert"
+    );
+
+    // Advance past the new 600ms expiry
+    advance(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        1,
+        "new task must fire at its own expiry"
+    );
+
+    h.shutdown();
+}
+
+/// Concurrent remove of the same ID must not cause a callback to fire (#1).
+#[tokio::test]
+async fn test_concurrent_remove_same_id() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    h.insert("A".into(), Duration::from_millis(200));
+
+    // Two concurrent removes on the same id
+    let h1 = h.clone();
+    let h2 = h.clone();
+    let (r1, r2) = tokio::join!(
+        tokio::task::spawn_blocking(move || h1.remove(&"A".to_string())),
+        tokio::task::spawn_blocking(move || h2.remove(&"A".to_string())),
+    );
+    assert!(r1.unwrap(), "first remove must succeed");
+    assert!(r2.unwrap(), "second remove must succeed");
+
+    advance(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        0,
+        "concurrent removes must prevent the callback"
+    );
+    h.shutdown();
+}
+
+/// remove() returns false when the channel is at capacity (#2).
+#[tokio::test]
+async fn test_remove_returns_false_on_full_channel() {
+    let n = Arc::new(AtomicUsize::new(0));
+    let config = WheelConfig {
+        tick_interval: Duration::from_millis(10),
+        channel_capacity: 1,
+        batch_size: 500,
+    };
+    let (h, _g) = TimingWheel::start(config, cb!(n));
+    let mut ok = true;
+    while ok {
+        ok = h.insert("filler".into(), Duration::from_secs(99));
+    }
+    assert!(
+        !h.remove(&"x".to_string()),
+        "remove on full channel must return false"
+    );
+    h.shutdown();
+}
+
+/// reset() must increment inserted_total after a successful call (#6).
+#[tokio::test]
+async fn test_reset_increments_inserted() {
+    pause();
+    let (h, _g) = TimingWheel::start(cfg_fast(), |_: String| async move {});
+
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    h.insert("A".into(), Duration::from_millis(200));
+    let before = h.inserted_total();
+
+    assert!(h.reset("A".into(), Duration::from_millis(600)));
+    assert_eq!(
+        h.inserted_total(),
+        before + 1,
+        "reset must increment inserted_total"
+    );
+
+    h.shutdown();
+}
+
+/// batch_size of 1 must not deadlock callback execution (#8).
+#[tokio::test]
+async fn test_batch_size_one_works() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let config = WheelConfig {
+        tick_interval: Duration::from_millis(10),
+        batch_size: 1,
+        channel_capacity: 64 * 1024,
+    };
+    let (h, _g) = TimingWheel::start(config, cb!(n));
+
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_millis(100));
+    advance(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        1,
+        "task must fire with batch_size=1"
+    );
+    h.shutdown();
+}

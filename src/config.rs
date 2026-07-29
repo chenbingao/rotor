@@ -9,6 +9,7 @@ pub struct WheelConfig {
     /// Default: 1 second.
     pub tick_interval: Duration,
     /// Maximum callback spawns per tick to avoid overwhelming the runtime.
+    /// Must be >= 1.
     /// Default: 500.
     pub batch_size: usize,
     /// Command channel capacity.  Sends beyond this return `false`.

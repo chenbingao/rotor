@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-29
+
+### Fixed
+
+- **`insert()` replacement of same-ID could fire old callback (#3).** The
+  `Cmd::Insert` handler now purges matching entries from the `pending` batch
+  (via `pending.retain`) in the same way `Cmd::Reset` does.
+
+- **Concurrent `remove`/`reset` of the same ID were unsafe (#1).** The
+  cancellation set was a `HashSet` (boolean flag) that multiple concurrent
+  calls could stomp. Replaced with `HashMap<T, usize>` reference counting —
+  each call increments the count, each worker command decrements, and
+  `drain()` performs a read-only check.
+
+- **Missing `inserted_total` increment for `reset()` (#6).** `reset()` now
+  explicitly increments the counter on a successful channel send.
+
+- **`reset()` doc claimed marker retained on failure (#7).** Documentation
+  updated to reflect the actual 0.2.1 rollback behaviour.
+
+- **`batch_size` of 1 deadlocked callback execution (#8).** `drain` limit
+  is now `max(batch_size / 2, 1)`; `start()` asserts `batch_size >= 1`.
+
+- **Benchmarks did not compile (#9).** Fixed `use rotor::` → `use rotor_wheel::`.
+
+### Changed
+
+- **`remove()` returns `bool` again.** `false` means the async arena cleanup
+  could not be enqueued; the cancellation guarantee still holds regardless.
+
+- **Cancellation guarantee scope tightened (#4).** The guarantee covers
+  callbacks up to the point they are spawned. Once inside `tokio::spawn`
+  the callback cannot be intercepted. Documented in `drain()` and API docs.
+
+- **Slow callback blocking documented (#5).** `drain()` awaits each batch
+  in order. Long-running callbacks should spawn internally.
+
+### Added
+
+- 5 new regression tests: insert-replaces-pending, concurrent-remove-same-id,
+  remove-returns-false-on-full, reset-increments-inserted, batch-size-one.
+
 ## [0.2.1] — 2026-07-29
 
 ### Fixed

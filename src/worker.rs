@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     fmt::Debug,
     future::Future,
     hash::Hash,
@@ -27,7 +27,7 @@ pub(crate) async fn run<T, F, Fut>(
     mut rx: Receiver<Cmd<T>>,
     config: WheelConfig,
     metrics: Arc<Metrics>,
-    cancelled: Arc<Mutex<HashSet<T>>>,
+    cancelled: Arc<Mutex<HashMap<T, usize>>>,
     mut callback: F,
 ) where
     T: Eq + Hash + Clone + Debug,
@@ -39,22 +39,24 @@ pub(crate) async fn run<T, F, Fut>(
     let start = Instant::now();
     let mut pending: Vec<T> = Vec::new();
     let batch = config.batch_size;
+    let half = (batch / 2).max(1);
 
     loop {
         tokio::select! {
           cmd = rx.recv() => {
             match cmd {
               Some(Cmd::Insert(id, to)) => {
-                cancelled.lock().unwrap().remove(&id);
+                cancel_decrement(&cancelled, &id);
+                pending.retain(|x| x != &id);
                 wheel.schedule(id, to);
               }
               Some(Cmd::Reset(id, to))  => {
-                cancelled.lock().unwrap().remove(&id);
+                cancel_decrement(&cancelled, &id);
                 pending.retain(|x| x != &id);
                 wheel.schedule(id, to);
               }
               Some(Cmd::Remove(id))     => {
-                cancelled.lock().unwrap().remove(&id);
+                cancel_decrement(&cancelled, &id);
                 pending.retain(|x| x != &id);
                 wheel.remove(&id);
               }
@@ -67,14 +69,14 @@ pub(crate) async fn run<T, F, Fut>(
             let elapsed = start.elapsed();
             let target = (elapsed.as_millis() / config.tick_interval.as_millis().max(1)) as u64;
 
-            drain(&mut pending, &mut callback, &metrics, &cancelled, batch / 2).await;
+            drain(&mut pending, &mut callback, &metrics, &cancelled, half).await;
 
             while wheel.current_tick < target {
               pending.extend(wheel.advance(&metrics));
               if wheel.current_tick.wrapping_rem(10) == 0 { break; }
             }
 
-            drain(&mut pending, &mut callback, &metrics, &cancelled, batch / 2).await;
+            drain(&mut pending, &mut callback, &metrics, &cancelled, half).await;
           }
         }
     }
@@ -97,16 +99,17 @@ pub(crate) async fn run<T, F, Fut>(
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             Cmd::Insert(id, to) => {
-                cancelled.lock().unwrap().remove(&id);
+                cancel_decrement(&cancelled, &id);
+                pending.retain(|x| x != &id);
                 wheel.schedule(id, to);
             }
             Cmd::Reset(id, to) => {
-                cancelled.lock().unwrap().remove(&id);
+                cancel_decrement(&cancelled, &id);
                 pending.retain(|x| x != &id);
                 wheel.schedule(id, to);
             }
             Cmd::Remove(id) => {
-                cancelled.lock().unwrap().remove(&id);
+                cancel_decrement(&cancelled, &id);
                 pending.retain(|x| x != &id);
                 wheel.remove(&id);
             }
@@ -115,18 +118,38 @@ pub(crate) async fn run<T, F, Fut>(
     }
 }
 
+/// Decrement the cancellation count for `id`.  If it reaches zero the
+/// entry is removed so the map does not grow without bound.
+fn cancel_decrement<T: Eq + Hash>(cancelled: &Mutex<HashMap<T, usize>>, id: &T) {
+    let mut map = cancelled.lock().unwrap();
+    if let Some(c) = map.get_mut(id) {
+        *c = c.saturating_sub(1);
+        if *c == 0 {
+            map.remove(id);
+        }
+    }
+}
+
 /// Fire up to `limit` callbacks from the `pending` batch.
 /// Each callback is spawned via `tokio::spawn` and awaited.
 ///
-/// Before spawning, each ID is checked against the synchronous `cancelled`
-/// set.  If present the callback is skipped and the cache entry consumed.
+/// Before spawning, each ID is checked against the shared `cancelled` map.
+/// If the reference count is > 0 the callback is skipped; the count is
+/// not consumed here — it will be decremented when the corresponding
+/// worker command is processed.
+///
+/// The cancellation guarantee holds up to the `tokio::spawn` point.  Once
+/// a callback has been spawned it cannot be intercepted.
+///
+/// Long-running callbacks block the worker.  Spawn inside the callback
+/// for I/O-heavy work.
 ///
 /// Panicked callbacks are logged and counted in [`Metrics::abnormal`].
 async fn drain<T, F, Fut>(
     pending: &mut Vec<T>,
     callback: &mut F,
     metrics: &Metrics,
-    cancelled: &Mutex<HashSet<T>>,
+    cancelled: &Mutex<HashMap<T, usize>>,
     limit: usize,
 ) where
     T: Eq + Hash,
@@ -137,7 +160,11 @@ async fn drain<T, F, Fut>(
     let mut tasks = Vec::with_capacity(n);
     for _ in 0..n {
         if let Some(id) = pending.pop() {
-            if cancelled.lock().unwrap().remove(&id) {
+            let blocked = {
+                let map = cancelled.lock().unwrap();
+                map.get(&id).copied().unwrap_or(0) > 0
+            };
+            if blocked {
                 continue;
             }
             tasks.push(tokio::spawn(callback(id)));

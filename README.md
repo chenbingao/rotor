@@ -109,14 +109,20 @@ Commands (insert / reset / remove)
 
 ## Performance
 
-Benchmarks run on Apple M1, 50 000 one-shot tasks (256 slots, 20ms tick):
+Benchmarks run on Apple M1, 50 000 one-shot tasks (64 slots, 10 ms tick):
 
-| Metric | Value |
-|--------|-------|
-| Insert throughput | ~3 000 000 tasks/s |
-| Expiry accuracy | >95% within timeout window |
-| 10k heartbeat refresh | 0 false expirations over 10s |
-| Memory (50k active) | stable over 15s continuous churn |
+| Metric | v0.3.0 | v0.2.0 |
+|--------|--------|--------|
+| Insert 50k (usize) | ~3.0 ms | ~3.0 ms |
+| Reset 10k (usize) | ~2.3 ms | ~0.7 ms |
+| Expire 10k (usize, 100ms delay) | ~501 ms | ~501 ms |
+| 10k heartbeat refresh | 0 false expirations | 0 false expirations |
+| Memory (50k active) | stable under churn | stable under churn |
+
+Note: `reset` latency increased from ~70 ns to ~230 ns per call in v0.3.0
+due to the synchronous cancellation set (lock + HashMap insertion).  The
+`drain` hot path is unaffected and actually faster (read-only map check
+instead of write-and-remove).
 
 Run the stress tests yourself:
 

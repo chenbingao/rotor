@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use rotor::{TimingWheel, WheelConfig};
+use rotor_wheel::{TimingWheel, WheelConfig};
 use std::time::Duration;
 
 fn config() -> WheelConfig {
@@ -14,6 +14,7 @@ fn bench_insert(c: &mut Criterion) {
     c.bench_function("insert_50k", |b| {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .enable_time()
             .build()
             .unwrap();
         let total = 50_000;
@@ -32,6 +33,7 @@ fn bench_reset(c: &mut Criterion) {
     c.bench_function("reset_10k", |b| {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .enable_time()
             .build()
             .unwrap();
         let total = 10_000;
@@ -53,6 +55,7 @@ fn bench_expire(c: &mut Criterion) {
     c.bench_function("expire_10k", |b| {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .enable_time()
             .build()
             .unwrap();
 
