@@ -40,6 +40,7 @@ pub(crate) async fn run<T, F, Fut>(
     let mut pending: Vec<T> = Vec::new();
     let batch = config.batch_size;
     let half = (batch / 2).max(1);
+    let extra = batch.saturating_sub(half * 2);
 
     loop {
         tokio::select! {
@@ -69,7 +70,7 @@ pub(crate) async fn run<T, F, Fut>(
             let elapsed = start.elapsed();
             let target = (elapsed.as_millis() / config.tick_interval.as_millis().max(1)) as u64;
 
-            drain(&mut pending, &mut callback, &metrics, &cancelled, half).await;
+            drain(&mut pending, &mut callback, &metrics, &cancelled, half + extra).await;
 
             while wheel.current_tick < target {
               pending.extend(wheel.advance(&metrics));

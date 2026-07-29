@@ -5,11 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-07-29
+
+### Fixed
+
+- **`remove(false)` 泄漏 cancelled 计数 (#1)。** `try_send` 失败时计数已递增
+  但未回滚，导致永久残留一个 block。现在失败时回滚计数并递增 `dropped_total`。
+
+- **`insert()` 无同步取消保护 (#3)。** `insert()` 原来不写入 cancelled 集合，
+  同 ID 旧回调可能在 `Cmd::Insert` 被处理之前就触发。现在与 `remove()`/`reset()`
+  一致，`insert()` 同步递增 cancelled 计数，`try_send` 失败时回滚。
+
+- **`remove(false)` 不递增 `dropped_total` (#7)。** 修复后 `try_send` 失败时
+  显式 `dropped.fetch_add(1)`。
+
+- **`batch_size=1` 每 tick 可能触发 2 个回调 (#5)。** drain 上限从
+  `max(batch/2, 1)` 改为 `half + extra` 分配（首段 ceiling 除，尾段 floor 除），
+  确保每 tick 总回调数 ≤ batch_size。
+
+### Changed
+
+- **文档缩小取消保证范围 (#8)。** `remove()`/`reset()`/`insert()` 的保证描述
+  加上 "up to the point the callback is spawned" 限定。
+
+- **移除 `dispatch()` 方法。** `insert()` 不再复用 `dispatch()`，与
+  `reset()`/`remove()` 采用统一的 try_send + rollback 模式。
+
 ## [0.3.1] — 2026-07-29
 
 ### Fixed
 
-- **`test_remove_level1_task_insert_new` 时序敏感导致偶发失败。** 测试中
+- **`test_remove_level1_task_insert_new` 时序敏感导致偶发失败 (#10)。** 测试中
   `advance` 同时驱动 tick 和命令处理，`select!` 交错顺序不确定。修复方案：
   `insert` 后用 `sleep` 排空命令队列，确保任务已调度后再推进时间。
 

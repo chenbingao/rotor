@@ -45,11 +45,10 @@ fn cancel_decrement<T: Eq + Hash>(map: &Mutex<HashMap<T, usize>>, id: &T) {
 
 /// Clonable handle for inserting, resetting, and removing tasks.
 ///
-/// `remove()` and `reset()` register a synchronous cancellation marker
-/// that prevents the callback from firing even if the task was already
-/// queued for execution when the call was made.  The guarantee holds up
-/// to the point where the callback is spawned; once inside `tokio::spawn`
-/// the callback cannot be intercepted.
+/// `remove()`、`reset()`、`insert()` register a synchronous cancellation
+/// marker that prevents the callback from firing (up to the point where
+/// the callback is spawned).  Once inside `tokio::spawn` the callback
+/// cannot be intercepted.
 #[derive(Clone)]
 pub struct TimingWheel<T> {
     tx: Sender<Cmd<T>>,
@@ -79,9 +78,11 @@ impl<T: Send + 'static> TimingWheel<T> {
     /// Schedule a one-shot task that fires after `timeout`.
     ///
     /// If a task with the same `id` already exists, its timeout is replaced
-    /// and any pending callback for that id is cancelled.
+    /// and any pending callback for that id is cancelled (guaranteed up to
+    /// the point the callback is spawned).
     ///
-    /// Returns `false` if the command channel is at capacity.
+    /// Returns `false` if the command channel is at capacity; in that case
+    /// the cancellation marker is rolled back and the caller should retry.
     ///
     /// # Example
     ///
@@ -94,16 +95,25 @@ impl<T: Send + 'static> TimingWheel<T> {
     #[inline]
     pub fn insert(&self, id: T, timeout: Duration) -> bool
     where
-        T: Clone,
+        T: Clone + Eq + Hash,
     {
-        self.dispatch(Cmd::Insert(id, timeout))
+        cancel_increment(&self.cancelled, &id);
+        if self.tx.try_send(Cmd::Insert(id.clone(), timeout)).is_ok() {
+            self.shared.inserted.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            cancel_decrement(&self.cancelled, &id);
+            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            false
+        }
     }
 
     /// Refresh (or create) an ongoing task with a new timeout.
     ///
     /// The previous callback (if already queued for execution) is guaranteed
     /// not to fire — a synchronous cancellation marker is registered before
-    /// the new timeout is scheduled.
+    /// the new timeout is scheduled (guaranteed up to the point the callback
+    /// is spawned).
     ///
     /// Returns `false` if the command channel is at capacity; in that case
     /// the cancellation marker is rolled back and the caller should retry.
@@ -133,13 +143,13 @@ impl<T: Send + 'static> TimingWheel<T> {
     }
 
     /// Cancel a task.  Once this method returns the callback is guaranteed
-    /// not to fire — the cancellation is registered synchronously.
+    /// not to fire — the cancellation is registered synchronously (up to
+    /// the point the callback is spawned).
     ///
     /// Safe to call for IDs that do not exist (no-op).
     ///
-    /// Returns `false` when the command channel is at capacity and the
-    /// asynchronous arena cleanup could not be enqueued.  The cancellation
-    /// guarantee still holds regardless.
+    /// Returns `false` when the command channel is at capacity; in that case
+    /// the cancellation marker is rolled back and the caller should retry.
     ///
     /// # Example
     ///
@@ -156,7 +166,13 @@ impl<T: Send + 'static> TimingWheel<T> {
         T: Clone + Eq + Hash,
     {
         cancel_increment(&self.cancelled, id);
-        self.tx.try_send(Cmd::Remove(id.clone())).is_ok()
+        if self.tx.try_send(Cmd::Remove(id.clone())).is_ok() {
+            true
+        } else {
+            cancel_decrement(&self.cancelled, id);
+            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            false
+        }
     }
 
     /// Gracefully shut down the wheel.  Pending callbacks will still fire
@@ -205,16 +221,6 @@ impl<T: Send + 'static> TimingWheel<T> {
     #[inline]
     pub fn abnormal_total(&self) -> usize {
         self.shared.abnormal.load(Ordering::Relaxed)
-    }
-
-    fn dispatch(&self, cmd: Cmd<T>) -> bool {
-        if self.tx.try_send(cmd).is_ok() {
-            self.shared.inserted.fetch_add(1, Ordering::Relaxed);
-            true
-        } else {
-            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
-            false
-        }
     }
 }
 
