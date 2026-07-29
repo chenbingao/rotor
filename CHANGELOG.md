@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-07-29
+
+### Fixed
+
+- **batch drain 分配公式修正。** `batch_size=1` 时用 `(batch+1)/2` 导致两次
+  drain 仍各取 1，总计 2/每 tick。改用 `div_ceil(2)` / `batch/2` 分配，
+  总回调数严格 ≤ batch_size。
+
+### Added
+
+- 3 个 0.3.2 修复的回归测试：failed remove 计数回滚、dropped_total 递增、
+  failed insert 回滚。
+
 ## [0.3.2] — 2026-07-29
 
 ### Fixed
