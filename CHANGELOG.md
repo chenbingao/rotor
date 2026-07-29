@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-07-29
+
+### Fixed
+
+- **`test_remove_level1_task_insert_new` 时序敏感导致偶发失败。** 测试中
+  `advance` 同时驱动 tick 和命令处理，`select!` 交错顺序不确定。修复方案：
+  `insert` 后用 `sleep` 排空命令队列，确保任务已调度后再推进时间。
+
 ## [0.3.0] — 2026-07-29
 
 ### Fixed
