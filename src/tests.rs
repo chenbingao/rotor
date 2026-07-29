@@ -429,46 +429,109 @@ async fn test_batch_size_one_works() {
     h.shutdown();
 }
 
-// ── 0.3.2 regression tests ──────────────────────────────────────────────
+// ── 0.4.0 regression tests ──────────────────────────────────────────────
 
-/// remove() 失败后同 ID 任务到期应正常触发，证明计数已回滚 (#1)。
-/// 使用真时 runtime（非 pause），让 sender 和 worker 真实竞争 channel 容量。
-#[tokio::test(flavor = "multi_thread")]
-async fn test_failed_remove_does_not_leak_count() {
+/// try_reserve 消除 increment-rollback 窗口后，channel 满时
+/// remove/reset/insert 均返回 false、递增 dropped_total，且同一 ID
+/// 的原有任务到期后仍正常触发（cancelled 集合无残留）。
+#[tokio::test]
+async fn test_full_channel_ops_return_false_no_leak() {
+    pause();
+
+    let blocker_started = Arc::new(tokio::sync::Notify::new());
+    let blocker_release = Arc::new(tokio::sync::Notify::new());
     let n = Arc::new(AtomicUsize::new(0));
+
     let config = WheelConfig {
         tick_interval: Duration::from_millis(10),
         channel_capacity: 1,
         batch_size: 500,
     };
-    let (h, _g) = TimingWheel::start(config, cb!(n));
 
-    // 先插入 a，给足到期时间
-    h.insert("a".into(), Duration::from_millis(500));
+    let (h, _g) = TimingWheel::start(config, {
+        let blocker_started = Arc::clone(&blocker_started);
+        let blocker_release = Arc::clone(&blocker_release);
+        let n = Arc::clone(&n);
+        move |id: String| {
+            let blocker_started = Arc::clone(&blocker_started);
+            let blocker_release = Arc::clone(&blocker_release);
+            let n = Arc::clone(&n);
+            async move {
+                if id == "blocker" {
+                    blocker_started.notify_one();
+                    blocker_release.notified().await;
+                } else {
+                    n.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+    });
 
-    // 塞满 channel
-    let mut ok = true;
-    while ok {
-        ok = h.insert("filler".into(), Duration::from_secs(99));
-    }
+    // 1. 调度 a/b/c 并确认已被 worker 接收
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
 
-    // remove 失败 → 计数应回滚
+    assert!(h.insert("a".into(), Duration::from_millis(200)));
+    sleep(Duration::from_millis(5)).await;
+
+    assert!(h.insert("b".into(), Duration::from_millis(200)));
+    sleep(Duration::from_millis(5)).await;
+
+    assert!(h.insert("c".into(), Duration::from_millis(200)));
+    sleep(Duration::from_millis(5)).await;
+
+    advance(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(20)).await;
+    assert_eq!(h.active_tasks(), 3);
+
+    // 2. 调度 blocker 并确认 callback 已进入阻塞
+    assert!(h.insert("blocker".into(), Duration::from_millis(50)));
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+    // blocker 已到期 → drain → callback → signal → 停在 blocker_release
+    blocker_started.notified().await;
+
+    // 3. 确认 channel 容量满
+    assert!(
+        h.insert("fill1".into(), Duration::from_secs(60)),
+        "first filler must succeed"
+    );
+    assert!(
+        !h.insert("fill2".into(), Duration::from_secs(60)),
+        "second filler must fail"
+    );
+
+    // 4. 三个操作全部失败 + dropped_total 逐次精确 +1
+    let d0 = h.dropped_total();
     assert!(!h.remove(&"a".to_string()));
+    assert_eq!(h.dropped_total(), d0 + 1);
 
-    // 等待 a 到期（500ms + 余量）
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    let d1 = h.dropped_total();
+    assert!(!h.reset("b".into(), Duration::from_secs(1)));
+    assert_eq!(h.dropped_total(), d1 + 1);
 
+    let d2 = h.dropped_total();
+    assert!(!h.insert("c".into(), Duration::from_secs(1)));
+    assert_eq!(h.dropped_total(), d2 + 1);
+
+    // 5. 释放 blocker → worker 恢复 → a/b/c 各自到期触发
+    blocker_release.notify_one();
+    sleep(Duration::from_millis(30)).await;
+
+    advance(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(100)).await;
     assert_eq!(
         n.load(Ordering::SeqCst),
-        1,
-        "a must fire after failed remove"
+        3,
+        "a/b/c must all fire — cancelled set contains no stale markers"
     );
+
     h.shutdown();
 }
 
-/// remove() 失败时应递增 dropped_total (#7)。
+/// insert() 调用 try_reserve 失败时应递增 dropped_total 且不动 inserted_total。
 #[tokio::test]
-async fn test_failed_remove_increments_dropped() {
+async fn test_failed_insert_increments_dropped() {
     let config = WheelConfig {
         tick_interval: Duration::from_millis(10),
         channel_capacity: 1,
@@ -481,38 +544,10 @@ async fn test_failed_remove_increments_dropped() {
         ok = h.insert("filler".into(), Duration::from_secs(99));
     }
 
-    let before = h.dropped_total();
-    h.remove(&"x".to_string());
-    assert_eq!(
-        h.dropped_total(),
-        before + 1,
-        "failed remove must increment dropped_total"
-    );
-
-    h.shutdown();
-}
-
-/// insert() 失败时应回滚 cancelled 计数 (#3)。
-#[tokio::test]
-async fn test_failed_insert_rolls_back() {
-    let n = Arc::new(AtomicUsize::new(0));
-    let config = WheelConfig {
-        tick_interval: Duration::from_millis(10),
-        channel_capacity: 1,
-        batch_size: 500,
-    };
-    let (h, _g) = TimingWheel::start(config, cb!(n));
-
-    let mut ok = true;
-    while ok {
-        ok = h.insert("filler".into(), Duration::from_secs(99));
-    }
-
     let before_dropped = h.dropped_total();
     let before_inserted = h.inserted_total();
     assert!(!h.insert("a".into(), Duration::from_secs(99)));
 
-    // dropped_total 应递增，inserted_total 应不变
     assert_eq!(h.dropped_total(), before_dropped + 1);
     assert_eq!(h.inserted_total(), before_inserted);
 

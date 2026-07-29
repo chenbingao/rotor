@@ -11,9 +11,11 @@ cancellation, clock compensation, and concurrent batch processing.
 ## When to use
 
 - **Request timeouts**: wrap a request ID, cancel with `remove()` on success.
-  Once `remove()` returns the old callback is guaranteed not to fire.
+  The callback is blocked up to the point where the worker checks the cancelled
+  set; once the check has passed it cannot be intercepted.
 - **Extend deadlines**: `reset()` pushes the expiry further — heartbeat, request
-  progress, lease renewal.  O(1); old callbacks are guaranteed cancelled.
+  progress, lease renewal.  O(1); old callbacks are blocked up to the cancelled-set
+  check.
 
 For simple `tokio::time::sleep` + `tokio::spawn` patterns, this library is
 overkill. It shines when you have **thousands of concurrent timers** that
@@ -22,7 +24,8 @@ need O(1) refresh.
 ## Features
 
 - **Guaranteed cancellation** — `remove()` and `reset()` synchronously register
-  a cancellation marker; callbacks blocked in this way will never fire.
+  a cancellation marker; callbacks are blocked up to the point the worker checks
+  the cancelled set.
 - **Per-task timeout** — every `insert` / `reset` takes an explicit `Duration`.
 - **Clock compensation** — catches up after GC pauses or system load spikes.
 - **Batch processing** — limits callback spawns per tick to avoid runtime overload.
@@ -33,7 +36,7 @@ need O(1) refresh.
 
 ```toml
 [dependencies]
-rotor-wheel = "0.1"
+rotor-wheel = "0.4"
 ```
 
 ## Quick start
@@ -101,9 +104,8 @@ Commands (insert / reset / remove)
   from an earlier `reset`), the slot is reclaimed and no callback fires.
   Otherwise the task has expired → callback fires.
 - **drain**: before spawning each callback, checks a shared `cancelled` set.
-  `remove()` and `reset()` synchronously insert into this set, so once either
-  call returns the old callback is guaranteed not to fire — even if it was
-  already queued in the pending batch.
+  `remove()` and `reset()` synchronously insert into this set; callbacks are
+  blocked up to the point where `drain()` performs this check.
 - **clock compensation**: `elapsed / tick_interval` gives the target
   tick; the worker catches up if it falls behind.
 

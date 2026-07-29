@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-29
+
+### Changed
+
+- **try_reserve 消除 increment-rollback 竞态窗口。** `insert()`/`remove()`/
+  `reset()` 改用 `tx.try_reserve() → cancel_increment → permit.send` 模式：
+  channel 容量预留成功后才写入 cancelled 集合，失败时不碰集合，彻底消除
+  "先增后回滚"窗口内 worker 误杀 callback 的竞态。
+
+- **文档精确化取消保证范围。** 取消保证的线性化点从 "spawn" 修正为 "worker 在
+  `drain()` 中检查 cancelled 集合的时刻"。struct 文档、三方法 rustdoc、README
+  中英文版、worker 内部注释全部同步。false 分支描述改为 "command was not
+  accepted; no cancellation state was changed"。
+
+- **`insert()`/`reset()` 省去一次 clone。** `id` 直接 move 入 `Cmd`，不再额外
+  clone（`cancel_increment` 内部已 clone），路径更短。
+
+### Added
+
+- **oneshot 确定性回归测试。** 用 `blocker_started`/`blocker_release` 两个 Notify
+  使 worker 精确停在 `drain` 内，再验证 channel 满时三个方法均返回 false、
+  `dropped_total` 逐次精确 +1、同一 ID 的原有任务到期仍触发（cancelled 无残留）。
+
+### Removed
+
+- **`handle.rs` 失败回滚逻辑。** `try_send` 失败后调用 `cancel_decrement` 回滚的
+  分支全部删除——`try_reserve` 失败时根本没递增，无需回滚。`cancel_decrement`
+  函数本身保留（worker 仍消费 marker）。
+
 ## [0.3.4] — 2026-07-29
 
 ### Fixed

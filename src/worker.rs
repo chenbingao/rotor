@@ -139,8 +139,9 @@ fn cancel_decrement<T: Eq + Hash>(cancelled: &Mutex<HashMap<T, usize>>, id: &T) 
 /// not consumed here — it will be decremented when the corresponding
 /// worker command is processed.
 ///
-/// The cancellation guarantee holds up to the `tokio::spawn` point.  Once
-/// a callback has been spawned it cannot be intercepted.
+/// The cancellation guarantee holds up to the point where `drain()` checks
+/// the cancelled set.  Once the check has passed, subsequent calls to
+/// `remove`/`reset`/`insert` cannot intercept the callback.
 ///
 /// Long-running callbacks block the worker.  Spawn inside the callback
 /// for I/O-heavy work.

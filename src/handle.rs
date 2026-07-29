@@ -31,24 +31,14 @@ where
         .or_insert(1);
 }
 
-fn cancel_decrement<T: Eq + Hash>(map: &Mutex<HashMap<T, usize>>, id: &T) {
-    let mut guard = map.lock().unwrap();
-    if let Some(c) = guard.get_mut(id) {
-        *c = c.saturating_sub(1);
-        if *c == 0 {
-            guard.remove(id);
-        }
-    }
-}
-
 // ── Public handle ───────────────────────────────────────────────────────
 
 /// Clonable handle for inserting, resetting, and removing tasks.
 ///
 /// `remove()`、`reset()`、`insert()` register a synchronous cancellation
-/// marker that prevents the callback from firing (up to the point where
-/// the callback is spawned).  Once inside `tokio::spawn` the callback
-/// cannot be intercepted.
+/// marker that prevents the callback from firing. The guarantee holds up to
+/// the point where the worker checks the cancelled set in `drain()`; once the
+/// check has passed, subsequent calls cannot intercept the callback.
 #[derive(Clone)]
 pub struct TimingWheel<T> {
     tx: Sender<Cmd<T>>,
@@ -79,10 +69,10 @@ impl<T: Send + 'static> TimingWheel<T> {
     ///
     /// If a task with the same `id` already exists, its timeout is replaced
     /// and any pending callback for that id is cancelled (guaranteed up to
-    /// the point the callback is spawned).
+    /// the point the worker checks the cancelled set).
     ///
     /// Returns `false` if the command channel is at capacity; in that case
-    /// the cancellation marker is rolled back and the caller should retry.
+    /// the command was not accepted and no cancellation state was changed.
     ///
     /// # Example
     ///
@@ -97,14 +87,17 @@ impl<T: Send + 'static> TimingWheel<T> {
     where
         T: Clone + Eq + Hash,
     {
-        cancel_increment(&self.cancelled, &id);
-        if self.tx.try_send(Cmd::Insert(id.clone(), timeout)).is_ok() {
-            self.shared.inserted.fetch_add(1, Ordering::Relaxed);
-            true
-        } else {
-            cancel_decrement(&self.cancelled, &id);
-            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
-            false
+        match self.tx.try_reserve() {
+            Ok(permit) => {
+                cancel_increment(&self.cancelled, &id);
+                permit.send(Cmd::Insert(id, timeout));
+                self.shared.inserted.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(_) => {
+                self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+                false
+            }
         }
     }
 
@@ -112,11 +105,11 @@ impl<T: Send + 'static> TimingWheel<T> {
     ///
     /// The previous callback (if already queued for execution) is guaranteed
     /// not to fire — a synchronous cancellation marker is registered before
-    /// the new timeout is scheduled (guaranteed up to the point the callback
-    /// is spawned).
+    /// the new timeout is scheduled (guaranteed up to the point the worker
+    /// checks the cancelled set).
     ///
     /// Returns `false` if the command channel is at capacity; in that case
-    /// the cancellation marker is rolled back and the caller should retry.
+    /// the command was not accepted and no cancellation state was changed.
     ///
     /// # Example
     ///
@@ -131,25 +124,28 @@ impl<T: Send + 'static> TimingWheel<T> {
     where
         T: Clone + Eq + Hash,
     {
-        cancel_increment(&self.cancelled, &id);
-        if self.tx.try_send(Cmd::Reset(id.clone(), timeout)).is_ok() {
-            self.shared.inserted.fetch_add(1, Ordering::Relaxed);
-            true
-        } else {
-            cancel_decrement(&self.cancelled, &id);
-            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
-            false
+        match self.tx.try_reserve() {
+            Ok(permit) => {
+                cancel_increment(&self.cancelled, &id);
+                permit.send(Cmd::Reset(id, timeout));
+                self.shared.inserted.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(_) => {
+                self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+                false
+            }
         }
     }
 
     /// Cancel a task.  Once this method returns the callback is guaranteed
-    /// not to fire — the cancellation is registered synchronously (up to
-    /// the point the callback is spawned).
+    /// not to fire — the cancellation is registered synchronously (up to the
+    /// point the worker checks the cancelled set).
     ///
     /// Safe to call for IDs that do not exist (no-op).
     ///
     /// Returns `false` when the command channel is at capacity; in that case
-    /// the cancellation marker is rolled back and the caller should retry.
+    /// the command was not accepted and no cancellation state was changed.
     ///
     /// # Example
     ///
@@ -165,13 +161,16 @@ impl<T: Send + 'static> TimingWheel<T> {
     where
         T: Clone + Eq + Hash,
     {
-        cancel_increment(&self.cancelled, id);
-        if self.tx.try_send(Cmd::Remove(id.clone())).is_ok() {
-            true
-        } else {
-            cancel_decrement(&self.cancelled, id);
-            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
-            false
+        match self.tx.try_reserve() {
+            Ok(permit) => {
+                cancel_increment(&self.cancelled, id);
+                permit.send(Cmd::Remove(id.clone()));
+                true
+            }
+            Err(_) => {
+                self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+                false
+            }
         }
     }
 
