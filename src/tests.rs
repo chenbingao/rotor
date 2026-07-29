@@ -425,5 +425,103 @@ async fn test_batch_size_one_works() {
         1,
         "task must fire with batch_size=1"
     );
+
+    h.shutdown();
+}
+
+// ── 0.3.2 regression tests ──────────────────────────────────────────────
+
+/// remove() 失败后同 ID insert 不应被残留计数拦截 (#1)。
+#[tokio::test]
+async fn test_failed_remove_does_not_leak_count() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let config = WheelConfig {
+        tick_interval: Duration::from_millis(10),
+        channel_capacity: 1,
+        batch_size: 500,
+    };
+    let (h, _g) = TimingWheel::start(config, cb!(n));
+
+    // Fill channel so remove fails
+    let mut ok = true;
+    while ok {
+        ok = h.insert("filler".into(), Duration::from_secs(99));
+    }
+
+    // remove fails → count should be rolled back
+    assert!(
+        !h.remove(&"a".to_string()),
+        "remove on full channel must return false"
+    );
+
+    // New wheel with room for commands: a fresh insert of "a" must not be blocked
+    let (h2, _g2) = TimingWheel::start(cfg_fast(), cb!(n));
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    h2.insert("a".into(), Duration::from_millis(200));
+    advance(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        1,
+        "a must fire after failed remove on another wheel"
+    );
+
+    h.shutdown();
+    h2.shutdown();
+}
+
+/// remove() 失败时应递增 dropped_total (#7)。
+#[tokio::test]
+async fn test_failed_remove_increments_dropped() {
+    let config = WheelConfig {
+        tick_interval: Duration::from_millis(10),
+        channel_capacity: 1,
+        batch_size: 500,
+    };
+    let (h, _g) = TimingWheel::start(config, |_: String| async move {});
+
+    let mut ok = true;
+    while ok {
+        ok = h.insert("filler".into(), Duration::from_secs(99));
+    }
+
+    let before = h.dropped_total();
+    h.remove(&"x".to_string());
+    assert_eq!(
+        h.dropped_total(),
+        before + 1,
+        "failed remove must increment dropped_total"
+    );
+
+    h.shutdown();
+}
+
+/// insert() 失败时应回滚 cancelled 计数 (#3)。
+#[tokio::test]
+async fn test_failed_insert_rolls_back() {
+    let n = Arc::new(AtomicUsize::new(0));
+    let config = WheelConfig {
+        tick_interval: Duration::from_millis(10),
+        channel_capacity: 1,
+        batch_size: 500,
+    };
+    let (h, _g) = TimingWheel::start(config, cb!(n));
+
+    let mut ok = true;
+    while ok {
+        ok = h.insert("filler".into(), Duration::from_secs(99));
+    }
+
+    let before_dropped = h.dropped_total();
+    let before_inserted = h.inserted_total();
+    assert!(!h.insert("a".into(), Duration::from_secs(99)));
+
+    // dropped_total 应递增，inserted_total 应不变
+    assert_eq!(h.dropped_total(), before_dropped + 1);
+    assert_eq!(h.inserted_total(), before_inserted);
+
     h.shutdown();
 }
