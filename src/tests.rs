@@ -431,10 +431,10 @@ async fn test_batch_size_one_works() {
 
 // ── 0.3.2 regression tests ──────────────────────────────────────────────
 
-/// remove() 失败后同 ID insert 不应被残留计数拦截 (#1)。
-#[tokio::test]
+/// remove() 失败后同 ID 任务到期应正常触发，证明计数已回滚 (#1)。
+/// 使用真时 runtime（非 pause），让 sender 和 worker 真实竞争 channel 容量。
+#[tokio::test(flavor = "multi_thread")]
 async fn test_failed_remove_does_not_leak_count() {
-    pause();
     let n = Arc::new(AtomicUsize::new(0));
     let config = WheelConfig {
         tick_interval: Duration::from_millis(10),
@@ -443,34 +443,27 @@ async fn test_failed_remove_does_not_leak_count() {
     };
     let (h, _g) = TimingWheel::start(config, cb!(n));
 
-    // Fill channel so remove fails
+    // 先插入 a，给足到期时间
+    h.insert("a".into(), Duration::from_millis(500));
+
+    // 塞满 channel
     let mut ok = true;
     while ok {
         ok = h.insert("filler".into(), Duration::from_secs(99));
     }
 
-    // remove fails → count should be rolled back
-    assert!(
-        !h.remove(&"a".to_string()),
-        "remove on full channel must return false"
-    );
+    // remove 失败 → 计数应回滚
+    assert!(!h.remove(&"a".to_string()));
 
-    // New wheel with room for commands: a fresh insert of "a" must not be blocked
-    let (h2, _g2) = TimingWheel::start(cfg_fast(), cb!(n));
-    advance(Duration::from_millis(100)).await;
-    sleep(Duration::from_millis(30)).await;
+    // 等待 a 到期（500ms + 余量）
+    tokio::time::sleep(Duration::from_millis(800)).await;
 
-    h2.insert("a".into(), Duration::from_millis(200));
-    advance(Duration::from_millis(300)).await;
-    sleep(Duration::from_millis(100)).await;
     assert_eq!(
         n.load(Ordering::SeqCst),
         1,
-        "a must fire after failed remove on another wheel"
+        "a must fire after failed remove"
     );
-
     h.shutdown();
-    h2.shutdown();
 }
 
 /// remove() 失败时应递增 dropped_total (#7)。
