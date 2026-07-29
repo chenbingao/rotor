@@ -99,7 +99,13 @@ impl<T: Send + 'static> TimingWheel<T> {
         T: Clone + Eq + Hash,
     {
         self.cancelled.lock().unwrap().insert(id.clone());
-        self.tx.try_send(Cmd::Reset(id, timeout)).is_ok()
+        if self.tx.try_send(Cmd::Reset(id.clone(), timeout)).is_ok() {
+            true
+        } else {
+            self.cancelled.lock().unwrap().remove(&id);
+            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            false
+        }
     }
 
     /// Cancel a task.  Once this method returns the callback is guaranteed

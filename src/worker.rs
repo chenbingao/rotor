@@ -54,6 +54,7 @@ pub(crate) async fn run<T, F, Fut>(
                 wheel.schedule(id, to);
               }
               Some(Cmd::Remove(id))     => {
+                cancelled.lock().unwrap().remove(&id);
                 pending.retain(|x| x != &id);
                 wheel.remove(&id);
               }
@@ -105,6 +106,7 @@ pub(crate) async fn run<T, F, Fut>(
                 wheel.schedule(id, to);
             }
             Cmd::Remove(id) => {
+                cancelled.lock().unwrap().remove(&id);
                 pending.retain(|x| x != &id);
                 wheel.remove(&id);
             }
