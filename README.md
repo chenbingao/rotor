@@ -5,16 +5,15 @@
 
 General-purpose hierarchical timing wheel for Rust async runtimes.
 
-Inspired by Netty's `HashedWheelTimer` — single-threaded core, lazy deletion
-with generation counters, clock compensation, and concurrent batch processing.
+Inspired by Netty's `HashedWheelTimer` — single-threaded core, synchronous
+cancellation, clock compensation, and concurrent batch processing.
 
 ## When to use
 
-- **Extend deadlines**: `reset()` to push the expiry further — heartbeat, request
-  progress, lease renewal.  O(1), old slot copies lazily discarded.
-- **One-shot delays**: `insert()` a task once, callback fires after timeout,
-  no cleanup needed.
 - **Request timeouts**: wrap a request ID, cancel with `remove()` on success.
+  Once `remove()` returns the old callback is guaranteed not to fire.
+- **Extend deadlines**: `reset()` pushes the expiry further — heartbeat, request
+  progress, lease renewal.  O(1); old callbacks are guaranteed cancelled.
 
 For simple `tokio::time::sleep` + `tokio::spawn` patterns, this library is
 overkill. It shines when you have **thousands of concurrent timers** that
@@ -22,7 +21,8 @@ need O(1) refresh.
 
 ## Features
 
-- **O(1) reset** — lazy deletion with generation counters keeps the hot path fast.
+- **Guaranteed cancellation** — `remove()` and `reset()` synchronously register
+  a cancellation marker; callbacks blocked in this way will never fire.
 - **Per-task timeout** — every `insert` / `reset` takes an explicit `Duration`.
 - **Clock compensation** — catches up after GC pauses or system load spikes.
 - **Batch processing** — limits callback spawns per tick to avoid runtime overload.
@@ -85,20 +85,25 @@ Commands (insert / reset / remove)
 |    ^                       |
 |  current_tick              |  advance() -> sweep
 |                            |  cascade L2->L1->L0
-|  task_info: HashMap        |  expire_tick + generation
-|  arena: Vec<TaskEntry>     |
+  |  id_map: HashMap           |  id → arena index
+  |  arena: Vec<TaskEntry>     |
 +----------------------------+
     |
     v   tokio::spawn per callback
   expired tasks (batch_size limit)
 ```
 
-- **insert / reset**: pushes a `Scheduled { id, generation }` into the
-  target slot, bumps the generation in `task_info`.
-- **advance**: drains the slot at `current_tick`.  If `task_info` still
-  holds the matching generation → task has expired → callback fires.
-  Old copies from earlier `reset`s have a stale generation and are
-  silently discarded.
+- **insert / reset**: allocates an arena slot and pushes its index into the
+  target bucket.  `reset` bumps the generation and assigns a new arena slot;
+  the old slot becomes unreachable from `id_map`.
+- **advance**: drains the bucket at `current_tick`.  Looks up the task ID in
+  `id_map`: if missing (removed) or the arena index has changed (stale copy
+  from an earlier `reset`), the slot is reclaimed and no callback fires.
+  Otherwise the task has expired → callback fires.
+- **drain**: before spawning each callback, checks a shared `cancelled` set.
+  `remove()` and `reset()` synchronously insert into this set, so once either
+  call returns the old callback is guaranteed not to fire — even if it was
+  already queued in the pending batch.
 - **clock compensation**: `elapsed / tick_interval` gives the target
   tick; the worker catches up if it falls behind.
 

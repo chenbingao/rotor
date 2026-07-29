@@ -9,15 +9,14 @@
 
 ## 适用场景
 
-- **重新计时**：`reset()` 推迟到期时间 — 心跳、请求进度、租约续约。O(1)，旧槽位副本懒删除。
-- **一次性延时**：`insert()` 到期后自动触发回调并清除，无需手动清理。
-- **请求超时**：包裹请求 ID，成功后 `remove()` 取消。
+- **请求超时**：包裹请求 ID，成功后 `remove()` 取消。`remove()` 返回后旧回调保证不触发。
+- **重新计时**：`reset()` 推迟到期时间 — 心跳、请求进度、租约续约。O(1)，旧回调保证被取消。
 
 简单的 `tokio::time::sleep` + `tokio::spawn` 场景不需要这个库。当你有**数千个并发定时器**需要 O(1) 刷新时才适用。
 
 ## 特性
 
-- **O(1) reset** — 生成计数器懒删除，延期操作 O(1)。
+- **保证取消** — `remove()` 和 `reset()` 同步注册取消标记，被拦截的回调保证不会触发。
 - **显式超时** — 每次 `insert` / `reset` 接受 `Duration`，无隐式默认值。
 - **时钟补偿** — GC 暂停或系统负载尖峰后自动追格，不会丢失时间。
 - **批量处理** — 每 tick 限制 spawn 数量，防止瞬间压爆 runtime。
@@ -89,18 +88,18 @@ Commands (insert / reset / remove)
 |    ^                       |
 |  current_tick              |  advance() -> sweep
 |                            |  cascade L2->L1->L0
-|  task_info: HashMap        |  expire_tick + generation
-|  arena: Vec<TaskEntry>     |
+  |  id_map: HashMap           |  id → arena index
+  |  arena: Vec<TaskEntry>     |
 +----------------------------+
     |
     v   tokio::spawn per callback
   expired tasks (batch_size limit)
 ```
 
-三层轮到期向下级联：L2 → L1 → L0 → 触发回调。槽内只存 arena 索引，不复制 ID。旧 reset 副本 generation 不匹配时自动丢弃。
+三层轮到期向下级联：L2 → L1 → L0 → 触发回调。槽内只存 arena 索引，不复制 ID。旧 `reset` 副本因 `id_map` 中索引已更新而被自动丢弃；`remove` 删除 `id_map` 条目后 bucket 排干时自动回收 slot。
 
-- **insert / reset**：将 `{ generation }` 推入目标槽位，bump `task_info` 中的 generation。
-- **advance**：清空 `current_tick` 对应槽位。如果 `task_info` 中 generation 匹配 → 到期 → 触发回调。旧 `reset` 副本 generation 不匹配 → 丢弃。
+- **insert / reset**：分配 arena slot，将其索引推入目标 bucket。`reset` 递增 generation 并分配新 slot，旧 slot 从 `id_map` 不可达。
+- **advance**：排空 `current_tick` 对应的 bucket。通过 `id_map` 查找任务 ID：若缺失（已 remove）或 arena 索引已变（旧 reset 的过期副本），则回收 slot 不触发回调。否则任务到期 → 触发回调。
 - **时钟补偿**：`已流逝时长 / tick_interval` 得出目标 tick，落后则连续追格。
 
 ## 性能

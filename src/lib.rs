@@ -28,7 +28,7 @@
 //!
 //! ```rust,no_run
 //! use std::time::Duration;
-//! use rotor::{TimingWheel, WheelConfig};
+//! use rotor_wheel::{TimingWheel, WheelConfig};
 //!
 //! let (wheel, _guard) = TimingWheel::start(
 //!     WheelConfig::default(),
@@ -42,14 +42,14 @@
 //! ```
 
 mod config;
-mod wheel;
 mod handle;
+mod wheel;
 mod worker;
 
 pub use config::WheelConfig;
-pub use handle::{TimingWheel, TimingWheelGuard, Metrics};
+pub use handle::{Metrics, TimingWheel, TimingWheelGuard};
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod stress;
+#[cfg(test)]
+mod tests;

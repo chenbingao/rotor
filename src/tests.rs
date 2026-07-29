@@ -3,116 +3,284 @@
 use super::*;
 use crate::*;
 use std::future::Future;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 use tokio::time::{advance, pause, sleep};
 
 fn cfg_fast() -> WheelConfig {
-  WheelConfig { tick_interval: Duration::from_millis(10), ..Default::default() }
+    WheelConfig {
+        tick_interval: Duration::from_millis(10),
+        ..Default::default()
+    }
 }
 
 macro_rules! cb {
-  ($n:ident) => {{
-    let n = Arc::clone(&$n);
-    move |_: String| { let n = Arc::clone(&n); async move { n.fetch_add(1, Ordering::SeqCst); } }
-  }};
+    ($n:ident) => {{
+        let n = Arc::clone(&$n);
+        move |_: String| {
+            let n = Arc::clone(&n);
+            async move {
+                n.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }};
 }
 
 #[tokio::test]
 async fn test_one_shot() {
-  pause();
-  let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
-  sleep(Duration::from_millis(5)).await;
-  h.insert("x".into(), Duration::from_millis(200));
-  advance(Duration::from_millis(500)).await;
-  sleep(Duration::from_millis(100)).await;
-  assert_eq!(n.load(Ordering::SeqCst), 1);
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_millis(200));
+    advance(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_reset_extends() {
-  pause();
-  let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
-  sleep(Duration::from_millis(5)).await;
-  h.insert("x".into(), Duration::from_secs(1));
-  advance(Duration::from_millis(800)).await;
-  sleep(Duration::from_millis(100)).await;
-  h.reset("x".into(), Duration::from_secs(1));
-  advance(Duration::from_millis(800)).await;
-  sleep(Duration::from_millis(100)).await;
-  assert_eq!(n.load(Ordering::SeqCst), 0);
-  advance(Duration::from_secs(1)).await;
-  sleep(Duration::from_millis(200)).await;
-  assert_eq!(n.load(Ordering::SeqCst), 1);
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_secs(1));
+    advance(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(100)).await;
+    h.reset("x".into(), Duration::from_secs(1));
+    advance(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 0);
+    advance(Duration::from_secs(1)).await;
+    sleep(Duration::from_millis(200)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_remove() {
-  pause();
-  let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
-  sleep(Duration::from_millis(5)).await;
-  h.insert("x".into(), Duration::from_millis(200));
-  h.remove(&"x".to_string());
-  advance(Duration::from_millis(500)).await;
-  sleep(Duration::from_millis(100)).await;
-  assert_eq!(n.load(Ordering::SeqCst), 0);
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_millis(200));
+    h.remove(&"x".to_string());
+    advance(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn test_long_delay_cascades_down() {
-  pause();
-  let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
-  sleep(Duration::from_millis(5)).await;
-  h.insert("x".into(), Duration::from_secs(10));
-  advance(Duration::from_secs(5)).await;
-  sleep(Duration::from_millis(100)).await;
-  assert_eq!(n.load(Ordering::SeqCst), 0);
-  advance(Duration::from_secs(6)).await;
-  sleep(Duration::from_millis(100)).await;
-  assert_eq!(n.load(Ordering::SeqCst), 1);
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_secs(10));
+    advance(Duration::from_secs(5)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 0);
+    advance(Duration::from_secs(6)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_metrics() {
-  pause();
-  let (h, _g) = TimingWheel::start(cfg_fast(), |_: String| async move {});
-  sleep(Duration::from_millis(5)).await;
-  h.insert("a".into(), Duration::from_secs(10));
-  h.insert("b".into(), Duration::from_secs(10));
-  advance(Duration::from_millis(100)).await;
-  sleep(Duration::from_millis(50)).await;
-  assert_eq!(h.inserted_total(), 2);
-  assert!(h.active_tasks() > 0);
+    pause();
+    let (h, _g) = TimingWheel::start(cfg_fast(), |_: String| async move {});
+    sleep(Duration::from_millis(5)).await;
+    h.insert("a".into(), Duration::from_secs(10));
+    h.insert("b".into(), Duration::from_secs(10));
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.inserted_total(), 2);
+    assert!(h.active_tasks() > 0);
 }
 
 #[tokio::test]
 async fn test_shutdown() {
-  pause();
-  let n = Arc::new(AtomicUsize::new(0));
-  let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
-  sleep(Duration::from_millis(5)).await;
-  h.insert("x".into(), Duration::from_millis(100));
-  advance(Duration::from_millis(200)).await;
-  sleep(Duration::from_millis(100)).await;
-  h.shutdown();
-  assert!(n.load(Ordering::SeqCst) >= 1);
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_millis(100));
+    advance(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(100)).await;
+    h.shutdown();
+    assert!(n.load(Ordering::SeqCst) >= 1);
 }
 
 #[tokio::test]
 async fn test_panicked_callback_increments_abnormal() {
-  pause();
-  let (h, _g) = TimingWheel::start(cfg_fast(), move |_: String| {
-    async move { panic!("intentional") }
-  });
-  sleep(Duration::from_millis(5)).await;
-  h.insert("x".into(), Duration::from_millis(100));
-  advance(Duration::from_millis(300)).await;
-  sleep(Duration::from_millis(100)).await;
-  assert_eq!(h.abnormal_total(), 1);
-  assert_eq!(h.expirations_total(), 0);
-  h.shutdown();
+    pause();
+    let (h, _g) = TimingWheel::start(
+        cfg_fast(),
+        move |_: String| async move { panic!("intentional") },
+    );
+    sleep(Duration::from_millis(5)).await;
+    h.insert("x".into(), Duration::from_millis(100));
+    advance(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(h.abnormal_total(), 1);
+    assert_eq!(h.expirations_total(), 0);
+    h.shutdown();
+}
+
+// ── remove-then-insert regression tests ──────────────────────────────────
+
+/// remove → insert (different ID): the new task must NOT fire when the
+/// old task's bucket drains.  This is the core arena-reuse correctness bug.
+#[tokio::test]
+async fn test_remove_then_insert_different_id_no_false_fire() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+
+    // Let the wheel start ticking (roughly 10 ticks ahead)
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    // A expires at ~300ms from start (200ms delay from tick ~100ms)
+    h.insert("A".into(), Duration::from_millis(200));
+
+    // Move forward a bit then remove A
+    advance(Duration::from_millis(80)).await;
+    h.remove(&"A".to_string());
+
+    // B expires later: ~500ms from start (400ms delay from now)
+    h.insert("B".into(), Duration::from_millis(400));
+
+    // Advance past A's original expiry but before B's
+    advance(Duration::from_millis(80)).await;
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        0,
+        "B must not fire when A's old bucket drains"
+    );
+
+    // Advance past B's expiry
+    advance(Duration::from_millis(350)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 1, "B must fire at its own expiry");
+
+    h.shutdown();
+}
+
+/// remove → insert (same ID): the new schedule must fire exactly once
+/// at the new expiry, not at the old one.
+#[tokio::test]
+async fn test_remove_then_insert_same_id() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    // A expires at ~300ms
+    h.insert("A".into(), Duration::from_millis(200));
+
+    advance(Duration::from_millis(80)).await;
+    h.remove(&"A".to_string());
+
+    // Reinsert same ID with a much later expiry
+    h.insert("A".into(), Duration::from_millis(600));
+
+    // Advance past the original 200ms expiry
+    advance(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        0,
+        "A must not fire at the old expiry"
+    );
+
+    // Advance past the new 600ms expiry
+    advance(Duration::from_millis(400)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        1,
+        "A must fire once at the new expiry"
+    );
+
+    h.shutdown();
+}
+
+/// remove on a level-1 (longer-delay) task, then insert a new task.
+/// Verifies arena-reuse safety when the stale bucket is one level up.
+#[tokio::test]
+async fn test_remove_level1_task_insert_new() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    // Level 1 threshold: 64 ticks × 10ms = 640ms
+    // A expires at ~900ms (800ms delay)
+    h.insert("A".into(), Duration::from_millis(800));
+
+    advance(Duration::from_millis(200)).await;
+    h.remove(&"A".to_string());
+
+    // B expires at ~500ms (200ms delay from current time)
+    h.insert("B".into(), Duration::from_millis(200));
+
+    // Advance past B's expiry but before A's original expiry
+    advance(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 1, "B must fire at its own time");
+
+    // Advance past A's original expiry — must not fire again
+    advance(Duration::from_millis(600)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        n.load(Ordering::SeqCst),
+        1,
+        "no additional fire from A's stale bucket"
+    );
+
+    h.shutdown();
+}
+
+/// Insert and remove many tasks, then verify later tasks fire correctly.
+/// Exercises the free-list and arena slot lifecycle under churn.
+#[tokio::test]
+async fn test_churn_then_insert() {
+    pause();
+    let n = Arc::new(AtomicUsize::new(0));
+    let (h, _g) = TimingWheel::start(cfg_fast(), cb!(n));
+
+    advance(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(30)).await;
+
+    // Insert and remove many tasks — these never fire
+    for i in 0..100 {
+        let id = format!("churn-{i}");
+        h.insert(id.clone(), Duration::from_millis(300));
+        h.remove(&id);
+    }
+
+    // Fresh tasks that SHOULD fire
+    for i in 0..50 {
+        h.insert(format!("final-{i}"), Duration::from_millis(400));
+    }
+
+    // Advance past the churned tasks' expiry
+    advance(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 0, "churned tasks must not fire");
+
+    // Advance past the final tasks' expiry
+    advance(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(100)).await;
+    assert_eq!(n.load(Ordering::SeqCst), 50, "final tasks must all fire");
+
+    h.shutdown();
 }
