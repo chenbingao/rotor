@@ -56,7 +56,8 @@ pub struct Metrics {
     pub active: AtomicUsize,
     /// Cumulative `insert` + `reset` calls.
     pub inserted: AtomicUsize,
-    /// Commands dropped because the channel was at capacity.
+    /// Commands rejected because the channel was at capacity or the
+    /// receiver was closed.
     pub dropped: AtomicUsize,
     /// Callbacks that fired successfully.
     pub expirations: AtomicUsize,
@@ -138,9 +139,9 @@ impl<T: Send + 'static> TimingWheel<T> {
         }
     }
 
-    /// Cancel a task.  Once this method returns the callback is guaranteed
-    /// not to fire — the cancellation is registered synchronously (up to the
-    /// point the worker checks the cancelled set).
+    /// Cancel a task.  The callback is blocked up to the point where the
+    /// worker checks the cancelled set — once the check has passed,
+    /// subsequent calls cannot intercept the callback.
     ///
     /// Safe to call for IDs that do not exist (no-op).
     ///

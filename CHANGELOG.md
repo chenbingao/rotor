@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-07-29
+
+### Fixed
+
+- **`remove()` rustdoc 措辞修正。** "guaranteed not to fire" 改为与
+  `insert()`/`reset()` 一致的 cancelled-set check 语义。
+
+- **`dropped_total` 文档精确化。** 描述从 "channel at capacity" 扩展为
+  "channel at capacity or receiver closed"，覆盖 `try_reserve` 的 Closed 错误。
+
+### Known limitations
+
+- **try_reserve 成功后 receiver 并发关闭。** `Permit::send` 无条件成功，此时
+  marker 已递增但 worker 已终止无法消费。仅发生于 shutdown/abort 并发边界，
+  不影响正常运行。
+
+- **shutdown `try_recv` 不保证消费所有已接受命令。** 并发 shutdown 时少量
+  命令可能未被排空。文档已在 `TimingWheel::shutdown` 中说明尽力而为语义。
+
 ## [0.4.0] — 2026-07-29
 
 ### Changed
