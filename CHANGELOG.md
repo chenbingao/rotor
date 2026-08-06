@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-06
+
+### ⚠️ Breaking changes
+
+- **回调改为同步执行（Netty 模式）。** `TimingWheel::start()` 签名从
+  `FnMut(T) -> Future` 改为 `FnMut(T)`。回调在 worker 线程中原地同步执行，
+  不再通过 `tokio::spawn` 调度。泛型参数从 2 个减为 1 个（去掉 `Fut`）。
+  `T: Debug` bound 已移除。迁移：将 `|id| async move { ... }` 改为
+  `|id| { ... }`；异步工作通过 channel 传出去在独立 task 中处理。
+
+### Changed
+
+- **drain 同步化。** `drain()` 从 async 函数改为同步函数，回调通过
+  `catch_unwind` 原地执行。单个回调 panic 不会杀死 worker。
+
+- **简化 tick 处理。** 去掉 `half1`/`half2` 拆分，tick handler 改为
+  时钟追赶 → 单次 `drain(batch_size)`，消除为旧 async 模型设计的冗余结构。
+
+- **Shutdown 路径优化。** 引入 `Wheel::drain_all()`（O(192) bucket 遍历），
+  替代原 `for _ in 0..262144` tick 迭代。新增二次 drain 确保 `try_recv`
+  期间调度的任务不会丢失。
+
+- **`cancel_increment` 中 `id.clone()` 移至锁外。** 防止用户 `T::Clone`
+  panic 时毒化 cancelled Mutex。
+
+- **Shutdown `try_recv` 循环强化。** 对多余的 `Cmd::Shutdown` 不再 break，
+  确保所有已入队的命令都被处理。保留 `wheel.schedule()` + 追加 `drain_all`
+  以消除 shutdown 与 insert 竞态导致的回调静默丢失。
+
+- **`channel_capacity` 增加验证。** `start()` 新增 `assert!(channel_capacity >= 1)`。
+
+- **依赖放宽。** `tokio` 从 `1.53` → `1`（最低兼容 1.0），`test-util`
+  feature 移入 `[dev-dependencies]`。
+
+- **缩进统一为 2 空格。** 新增 `rustfmt.toml`（`tab_spaces = 2`）。
+
+### Added
+
+- **`Metrics::pending` + `TimingWheel::pending_len()`。** 暴露等待执行
+  的过期回调数量，便于运维监控时钟追赶时的 backlog。
+
+- **`TimingWheelGuard` 文档补充。** 明确 `task.abort()` 在同步回调执行
+  期间无法生效的边界条件。
+
+### Removed
+
+- **`TaskEntry::generation` 字段。** id_map 索引检查已覆盖所有 staleness
+  检测场景，generation 是冗余的 dead code。每条 arena 条目节省 8 字节。
+
+- **`Wheel` 的 `T: Debug` bound。** 不再需要（原为 callback panic 日志
+  使用，现在日志不含 id）。
+
+- **`tokio::spawn` / `JoinHandle` 相关逻辑。** drain 不再 spawn 回调。
+
+### Fixed
+
+- **回调闭包 panic 崩溃 worker。** `drain()` 中新增 `catch_unwind`，
+  闭包 panic 被捕获、记录并递增 `abnormal`，worker 继续运行。
+
+- **`config.rs` 注释过时。** "Maximum callback spawns" → "Maximum
+  callbacks executed per tick drain"。
+
 ## [0.4.2] — 2026-07-29
 
 ### Changed

@@ -32,7 +32,7 @@
 //!
 //! let (wheel, _guard) = TimingWheel::start(
 //!     WheelConfig::default(),
-//!     |sn: String| async move { println!("{sn} timed out") },
+//!     |sn: String| println!("{sn} timed out"),
 //! );
 //!
 //! wheel.insert("req-001".into(), Duration::from_secs(10));
